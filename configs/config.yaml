@@ -1,0 +1,56 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  read_timeout: 10s
+  write_timeout: 30s
+
+database:
+  host: "localhost"
+  port: 5432
+  user: "openpup"
+  password: "dev_password"
+  dbname: "agora"
+  sslmode: "disable"
+  max_open_conns: 100
+  max_idle_conns: 20
+  conn_max_lifetime: 30m
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+  pool_size: 50
+
+nats:
+  url: "nats://localhost:4222"
+  stream_replicas: 1
+
+auth:
+  api_key_prefix: "ak_"
+  jwt_secret: "dev_secret"
+  rate_limit_per_min: 1000
+  idempotency_ttl: "24h"
+  api_key_header_name: "X-Agent-Key"
+
+markets:
+  us_stock:
+    enabled: true
+    data_source: "fake"
+    sync_interval: "1m"
+  a_stock:
+    enabled: true
+    data_source: "fake"
+    sync_interval: "1m"
+  crypto:
+    enabled: true
+    data_source: "fake"
+    sync_interval: "1m"
+
+workers:
+  trust_calculator:
+    interval: "5m"
+  signal_verifier:
+    interval: "1m"
+  market_data_sync:
+    enabled: true
+    interval: "1m"

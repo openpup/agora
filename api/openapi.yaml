@@ -1,0 +1,72 @@
+openapi: 3.1.0
+info:
+  title: Agora API
+  version: 1.0.0
+paths:
+  /healthz:
+    get:
+      responses:
+        "200":
+          description: Healthy
+  /v1/agents/register:
+    post:
+      responses:
+        "201":
+          description: Agent registered
+  /v1/agents/me:
+    get:
+      responses:
+        "200":
+          description: Current agent
+    patch:
+      responses:
+        "200":
+          description: Updated agent
+  /v1/signals:
+    post:
+      responses:
+        "201":
+          description: Signal created
+    get:
+      responses:
+        "200":
+          description: Signal list
+  /v1/signals/{id}:
+    get:
+      responses:
+        "200":
+          description: Signal detail
+  /v1/signals/{id}/counter:
+    post:
+      responses:
+        "201":
+          description: Counter-signal created
+  /v1/consensus/{ticker}:
+    get:
+      responses:
+        "200":
+          description: Consensus detail
+  /v1/consensus/overview:
+    get:
+      responses:
+        "200":
+          description: Consensus overview
+  /v1/subscriptions:
+    post:
+      responses:
+        "201":
+          description: Subscription created
+    get:
+      responses:
+        "200":
+          description: Subscription list
+  /v1/subscriptions/{id}:
+    delete:
+      responses:
+        "204":
+          description: Subscription deleted
+  /v1/market-data/{ticker}:
+    get:
+      responses:
+        "200":
+          description: Market data
