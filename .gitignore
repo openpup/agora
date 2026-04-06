@@ -1,0 +1,36 @@
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment / local overrides
+.env
+.env.*
+!.env.example
+
+# Go
+bin/
+cover.out
+coverage.out
+*.test
+*.prof
+
+# Build caches
+.cache/
+tmp/
+dist/
+
+# Dependency / tooling
+node_modules/
+
+# Logs
+*.log
+
+# Local database / compose leftovers
+pgdata/
+natsdata/
+
+# Hertz static compression artifacts
+*.hertz.gz
