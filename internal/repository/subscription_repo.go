@@ -7,13 +7,13 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/openpup/agora/internal/domain"
+	"github.com/openpup/agora/internal/core"
 )
 
 type SubscriptionRepository interface {
-	Create(context.Context, *domain.Subscription) error
-	ListByAgent(context.Context, string) ([]domain.Subscription, error)
-	ListActive(context.Context) ([]domain.Subscription, error)
+	Create(context.Context, *core.Subscription) error
+	ListByAgent(context.Context, string) ([]core.Subscription, error)
+	ListActive(context.Context) ([]core.Subscription, error)
 	Delete(context.Context, string, string) error
 }
 
@@ -25,7 +25,7 @@ func NewPGSubscriptionRepository(pool *pgxpool.Pool) *PGSubscriptionRepository {
 	return &PGSubscriptionRepository{pool: pool}
 }
 
-func (r *PGSubscriptionRepository) Create(ctx context.Context, sub *domain.Subscription) error {
+func (r *PGSubscriptionRepository) Create(ctx context.Context, sub *core.Subscription) error {
 	filter, _ := json.Marshal(sub.Filter)
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO subscriptions (id, agent_id, filter, delivery, webhook_url, nats_subject, active, created_at, updated_at)
@@ -37,7 +37,7 @@ func (r *PGSubscriptionRepository) Create(ctx context.Context, sub *domain.Subsc
 	return nil
 }
 
-func (r *PGSubscriptionRepository) ListByAgent(ctx context.Context, agentID string) ([]domain.Subscription, error) {
+func (r *PGSubscriptionRepository) ListByAgent(ctx context.Context, agentID string) ([]core.Subscription, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, agent_id, filter, delivery, webhook_url, nats_subject, active, created_at, updated_at
 		FROM subscriptions WHERE agent_id=$1 ORDER BY created_at DESC
@@ -49,7 +49,7 @@ func (r *PGSubscriptionRepository) ListByAgent(ctx context.Context, agentID stri
 	return scanSubscriptions(rows)
 }
 
-func (r *PGSubscriptionRepository) ListActive(ctx context.Context) ([]domain.Subscription, error) {
+func (r *PGSubscriptionRepository) ListActive(ctx context.Context) ([]core.Subscription, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, agent_id, filter, delivery, webhook_url, nats_subject, active, created_at, updated_at
 		FROM subscriptions WHERE active=TRUE ORDER BY created_at DESC
@@ -74,10 +74,10 @@ type pgxRows interface {
 	Scan(...any) error
 }
 
-func scanSubscriptions(rows pgxRows) ([]domain.Subscription, error) {
-	var out []domain.Subscription
+func scanSubscriptions(rows pgxRows) ([]core.Subscription, error) {
+	var out []core.Subscription
 	for rows.Next() {
-		var sub domain.Subscription
+		var sub core.Subscription
 		var filter []byte
 		if err := rows.Scan(&sub.ID, &sub.AgentID, &filter, &sub.Delivery, &sub.WebhookURL, &sub.NATSSubject, &sub.Active, &sub.CreatedAt, &sub.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("subscription_repo.scanSubscriptions scan: %w", err)

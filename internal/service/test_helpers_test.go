@@ -4,10 +4,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 
-	"github.com/openpup/agora/internal/domain"
+	"github.com/openpup/agora/internal/core"
 )
 
-func encodeCursor(cursor domain.SignalListCursor) (string, error) {
+func encodeCursor(cursor core.SignalListCursor) (string, error) {
 	payload, err := json.Marshal(cursor)
 	if err != nil {
 		return "", err

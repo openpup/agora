@@ -1,27 +1,23 @@
 package pubsub
 
-import (
-	"fmt"
+import "fmt"
 
-	"github.com/openpup/agora/internal/domain"
-)
-
-func SignalPublishedSubject(market domain.Market, ticker string) string {
-	return fmt.Sprintf("signals.published.%s.%s", market, ticker)
+func SignalPublishedSubject(domain string, kind string) string {
+	return fmt.Sprintf("signals.published.%s.%s", domain, kind)
 }
 
-func SignalCounteredSubject(market domain.Market, ticker string) string {
-	return fmt.Sprintf("signals.countered.%s.%s", market, ticker)
+func SignalCounteredSubject(domain string) string {
+	return fmt.Sprintf("signals.countered.%s", domain)
 }
 
-func SignalVerifiedSubject(market domain.Market, ticker string) string {
-	return fmt.Sprintf("signals.verified.%s.%s", market, ticker)
+func SignalVerifiedSubject(domain string) string {
+	return fmt.Sprintf("signals.verified.%s", domain)
 }
 
 func AgentTrustUpdatedSubject(agentID string) string {
 	return fmt.Sprintf("agents.trust.updated.%s", agentID)
 }
 
-func MarketDataSubject(market domain.Market, ticker string) string {
-	return fmt.Sprintf("market.data.%s.%s", market, ticker)
+func DomainEventSubject(domain string, event string) string {
+	return fmt.Sprintf("domain.%s.%s", domain, event)
 }

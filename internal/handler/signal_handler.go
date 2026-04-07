@@ -3,11 +3,10 @@ package handler
 import (
 	"context"
 	"strconv"
-	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"github.com/openpup/agora/internal/domain"
+	"github.com/openpup/agora/internal/core"
 	"github.com/openpup/agora/internal/repository"
 	"github.com/openpup/agora/internal/service"
 )
@@ -22,16 +21,14 @@ func NewSignalHandler(service *service.SignalService, idempotency *service.Idemp
 }
 
 type createSignalRequest struct {
-	Market             string                     `json:"market"`
-	SignalType         string                     `json:"signal_type"`
-	Ticker             *string                    `json:"ticker"`
-	Direction          *string                    `json:"direction"`
-	Confidence         *float64                   `json:"confidence"`
-	TimeHorizon        string                     `json:"time_horizon"`
-	Reasoning          domain.Reasoning           `json:"reasoning"`
-	DataRefs           []map[string]any           `json:"data_refs"`
+	Domain             string                     `json:"domain"`
+	Kind               string                     `json:"kind"`
+	Claim              core.Claim                 `json:"claim"`
+	Reasoning          core.Reasoning             `json:"reasoning"`
+	Evidence           []core.Evidence            `json:"evidence"`
+	Refs               []core.CrossRef            `json:"refs"`
 	Meta               map[string]any             `json:"meta"`
-	DisagreementPoints []domain.DisagreementPoint `json:"disagreement_points"`
+	DisagreementPoints []core.DisagreementPoint   `json:"disagreement_points"`
 }
 
 func (h *SignalHandler) Create(ctx context.Context, c *app.RequestContext) {
@@ -44,35 +41,18 @@ func (h *SignalHandler) Create(ctx context.Context, c *app.RequestContext) {
 		writeError(c, 400, "SIGNAL_INVALID", err.Error())
 		return
 	}
-	market, err := domain.ParseMarket(req.Market)
-	if err != nil {
-		writeError(c, 400, "SIGNAL_INVALID_MARKET", err.Error())
+	if req.Domain == "" {
+		writeError(c, 400, "SIGNAL_INVALID_DOMAIN", "domain is required")
 		return
-	}
-	var direction *domain.Direction
-	if req.Direction != nil {
-		parsed := domain.Direction(*req.Direction)
-		direction = &parsed
-	}
-	var horizon *time.Duration
-	if req.TimeHorizon != "" {
-		d, err := time.ParseDuration(req.TimeHorizon)
-		if err != nil {
-			writeError(c, 400, "SIGNAL_INVALID_HORIZON", err.Error())
-			return
-		}
-		horizon = &d
 	}
 	signal, err := h.service.Create(ctx, service.CreateSignalInput{
 		AgentID:            agentIDFromContext(ctx, c),
-		Market:             market,
-		SignalType:         domain.SignalType(req.SignalType),
-		Ticker:             req.Ticker,
-		Direction:          direction,
-		Confidence:         req.Confidence,
-		TimeHorizon:        horizon,
+		Domain:             req.Domain,
+		Kind:               core.SignalKind(req.Kind),
+		Claim:              req.Claim,
 		Reasoning:          req.Reasoning,
-		DataRefs:           req.DataRefs,
+		Evidence:           req.Evidence,
+		Refs:               req.Refs,
 		Meta:               req.Meta,
 		DisagreementPoints: req.DisagreementPoints,
 	})
@@ -98,27 +78,20 @@ func (h *SignalHandler) CreateCounter(ctx context.Context, c *app.RequestContext
 		writeError(c, 400, "SIGNAL_INVALID", err.Error())
 		return
 	}
-	market, err := domain.ParseMarket(req.Market)
-	if err != nil {
-		writeError(c, 400, "SIGNAL_INVALID_MARKET", err.Error())
+	if req.Domain == "" {
+		writeError(c, 400, "SIGNAL_INVALID_DOMAIN", "domain is required")
 		return
 	}
 	parentID := c.Param("id")
-	var direction *domain.Direction
-	if req.Direction != nil {
-		parsed := domain.Direction(*req.Direction)
-		direction = &parsed
-	}
 	signal, err := h.service.Create(ctx, service.CreateSignalInput{
 		AgentID:            agentIDFromContext(ctx, c),
 		ParentID:           &parentID,
-		Market:             market,
-		SignalType:         domain.SignalType(req.SignalType),
-		Ticker:             req.Ticker,
-		Direction:          direction,
-		Confidence:         req.Confidence,
+		Domain:             req.Domain,
+		Kind:               core.SignalKind(req.Kind),
+		Claim:              req.Claim,
 		Reasoning:          req.Reasoning,
-		DataRefs:           req.DataRefs,
+		Evidence:           req.Evidence,
+		Refs:               req.Refs,
 		Meta:               req.Meta,
 		DisagreementPoints: req.DisagreementPoints,
 	})
@@ -144,9 +117,9 @@ func (h *SignalHandler) Get(ctx context.Context, c *app.RequestContext) {
 }
 
 func (h *SignalHandler) List(ctx context.Context, c *app.RequestContext) {
-	market, err := domain.ParseMarket(c.Query("market"))
-	if err != nil {
-		writeError(c, 400, "SIGNAL_INVALID_MARKET", err.Error())
+	domain := c.Query("domain")
+	if domain == "" {
+		writeError(c, 400, "SIGNAL_INVALID_DOMAIN", "domain query parameter is required")
 		return
 	}
 	limit := 50
@@ -160,17 +133,14 @@ func (h *SignalHandler) List(ctx context.Context, c *app.RequestContext) {
 		writeError(c, 400, "SIGNAL_INVALID_CURSOR", err.Error())
 		return
 	}
-	var ticker, agentID *string
-	if value := c.Query("ticker"); value != "" {
-		ticker = &value
-	}
+	var agentID *string
 	if value := c.Query("agent_id"); value != "" {
 		agentID = &value
 	}
-	var signalType *domain.SignalType
-	if value := c.Query("type"); value != "" {
-		parsed := domain.SignalType(value)
-		signalType = &parsed
+	var kind *core.SignalKind
+	if value := c.Query("kind"); value != "" {
+		parsed := core.SignalKind(value)
+		kind = &parsed
 	}
 	var minConfidence *float64
 	if value := c.Query("min_confidence"); value != "" {
@@ -184,9 +154,8 @@ func (h *SignalHandler) List(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	signals, nextCursor, err := h.service.List(ctx, repository.ListSignalsParams{
-		Market:        market,
-		Ticker:        ticker,
-		SignalType:    signalType,
+		Domain:        domain,
+		Kind:          kind,
 		AgentID:       agentID,
 		MinConfidence: minConfidence,
 		Since:         since,

@@ -5,7 +5,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"github.com/openpup/agora/internal/domain"
+	"github.com/openpup/agora/internal/core"
 	"github.com/openpup/agora/internal/service"
 )
 
@@ -19,10 +19,10 @@ func NewSubscriptionHandler(service *service.SubscriptionService, idempotency *s
 }
 
 type createSubscriptionRequest struct {
-	Filter      domain.SignalFilter `json:"filter"`
-	Delivery    string              `json:"delivery"`
-	WebhookURL  *string             `json:"webhook_url"`
-	NATSSubject *string             `json:"nats_subject"`
+	Filter      core.SignalFilter `json:"filter"`
+	Delivery    string            `json:"delivery"`
+	WebhookURL  *string           `json:"webhook_url"`
+	NATSSubject *string           `json:"nats_subject"`
 }
 
 func (h *SubscriptionHandler) Create(ctx context.Context, c *app.RequestContext) {
@@ -35,7 +35,7 @@ func (h *SubscriptionHandler) Create(ctx context.Context, c *app.RequestContext)
 		writeError(c, 400, "SUBSCRIPTION_INVALID", err.Error())
 		return
 	}
-	sub, err := h.service.Create(ctx, agentIDFromContext(ctx, c), req.Filter, domain.DeliveryMethod(req.Delivery), req.WebhookURL, req.NATSSubject)
+	sub, err := h.service.Create(ctx, agentIDFromContext(ctx, c), req.Filter, core.DeliveryMethod(req.Delivery), req.WebhookURL, req.NATSSubject)
 	if err != nil {
 		writeError(c, 400, "SUBSCRIPTION_CREATE_FAILED", err.Error())
 		return

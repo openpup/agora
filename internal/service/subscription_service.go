@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/openpup/agora/internal/domain"
+	"github.com/openpup/agora/internal/core"
 	pkgerrors "github.com/openpup/agora/internal/pkg/errors"
 	"github.com/openpup/agora/internal/repository"
 )
@@ -21,18 +22,18 @@ func NewSubscriptionService(repo repository.SubscriptionRepository) *Subscriptio
 	return &SubscriptionService{repo: repo}
 }
 
-func (s *SubscriptionService) Create(ctx context.Context, agentID string, filter domain.SignalFilter, delivery domain.DeliveryMethod, webhookURL, natsSubject *string) (*domain.Subscription, error) {
-	if !filter.Market.Valid() {
-		return nil, fmt.Errorf("subscription_service.Create market: %w", pkgerrors.ErrInvalidInput)
+func (s *SubscriptionService) Create(ctx context.Context, agentID string, filter core.SignalFilter, delivery core.DeliveryMethod, webhookURL, natsSubject *string) (*core.Subscription, error) {
+	if filter.Domain == "" {
+		return nil, fmt.Errorf("subscription_service.Create domain: %w", pkgerrors.ErrInvalidInput)
 	}
-	if delivery == domain.DeliveryWebhook && webhookURL == nil {
+	if delivery == core.DeliveryWebhook && webhookURL == nil {
 		return nil, fmt.Errorf("subscription_service.Create webhook: %w", pkgerrors.ErrInvalidInput)
 	}
-	if delivery == domain.DeliveryNATS && natsSubject == nil {
+	if delivery == core.DeliveryNATS && natsSubject == nil {
 		return nil, fmt.Errorf("subscription_service.Create nats subject: %w", pkgerrors.ErrInvalidInput)
 	}
 	now := time.Now().UTC()
-	sub := &domain.Subscription{
+	sub := &core.Subscription{
 		ID:          uuid.NewString(),
 		AgentID:     agentID,
 		Filter:      filter,
@@ -49,7 +50,7 @@ func (s *SubscriptionService) Create(ctx context.Context, agentID string, filter
 	return sub, nil
 }
 
-func (s *SubscriptionService) List(ctx context.Context, agentID string) ([]domain.Subscription, error) {
+func (s *SubscriptionService) List(ctx context.Context, agentID string) ([]core.Subscription, error) {
 	subs, err := s.repo.ListByAgent(ctx, agentID)
 	if err != nil {
 		return nil, fmt.Errorf("subscription_service.List: %w", err)
@@ -64,26 +65,36 @@ func (s *SubscriptionService) Delete(ctx context.Context, id, agentID string) er
 	return nil
 }
 
-func (s *SubscriptionService) Match(ctx context.Context, signal domain.Signal) ([]domain.Subscription, error) {
+func (s *SubscriptionService) Match(ctx context.Context, signal core.Signal) ([]core.Subscription, error) {
 	subs, err := s.repo.ListActive(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("subscription_service.Match: %w", err)
 	}
-	var out []domain.Subscription
+	var out []core.Subscription
 	for _, sub := range subs {
-		if sub.Filter.Market != signal.Market {
+		if !domainMatches(sub.Filter.Domain, signal.Domain) {
 			continue
 		}
-		if len(sub.Filter.Tickers) > 0 && (signal.Ticker == nil || !slices.Contains(sub.Filter.Tickers, *signal.Ticker)) {
+		if len(sub.Filter.Kinds) > 0 && !slices.Contains(sub.Filter.Kinds, signal.Kind) {
 			continue
 		}
-		if len(sub.Filter.SignalTypes) > 0 && !slices.Contains(sub.Filter.SignalTypes, signal.SignalType) {
-			continue
-		}
-		if sub.Filter.MinConfidence != nil && (signal.Confidence == nil || *signal.Confidence < *sub.Filter.MinConfidence) {
+		if sub.Filter.MinConfidence != nil && signal.Claim.Confidence < *sub.Filter.MinConfidence {
 			continue
 		}
 		out = append(out, sub)
 	}
 	return out, nil
+}
+
+// domainMatches checks if a filter pattern matches a signal domain.
+// Supports wildcard patterns like "finance.*" matching "finance.us_stock".
+func domainMatches(pattern, domain string) bool {
+	if pattern == domain {
+		return true
+	}
+	if strings.HasSuffix(pattern, ".*") {
+		prefix := strings.TrimSuffix(pattern, ".*")
+		return strings.HasPrefix(domain, prefix+".")
+	}
+	return false
 }

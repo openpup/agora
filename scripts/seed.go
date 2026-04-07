@@ -7,15 +7,122 @@ import (
 	"os"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
+
+const defaultDSN = "postgres://openpup:dev_password@localhost:5432/agora?sslmode=disable"
+
+type seededAgent struct {
+	ID             string
+	Name           string
+	Capabilities   []string
+	DataSources    []string
+	TrustScore     float64
+	ClaimTrust     float64
+	CounterTrust   float64
+	ResolverTrust  float64
+	ChallengeTrust float64
+	APIKey         string
+	Metadata       map[string]any
+}
+
+type seededDomain struct {
+	ID          string
+	Name        string
+	Namespace   string
+	ClaimSchema map[string]any
+	Resolution  map[string]any
+	Status      string
+}
+
+type seededSignal struct {
+	ID                 string
+	AgentID            string
+	ParentID           *string
+	Domain             string
+	Kind               string
+	Statement          string
+	Structured         map[string]any
+	Confidence         float64
+	VerifiableBy       *time.Time
+	Resolution         map[string]any
+	Reasoning          map[string]any
+	Evidence           []map[string]any
+	Disagreement       []map[string]any
+	Refs               []map[string]any
+	Verified           *bool
+	VerifiedAt         *time.Time
+	VerificationDetail map[string]any
+	Meta               map[string]any
+	CreatedAt          time.Time
+}
+
+type seededTrackRecord struct {
+	AgentID              string
+	Domain               string
+	TotalClaims          int
+	CorrectClaims        int
+	ClaimAccuracy        float64
+	TotalCounters        int
+	CorrectCounters      int
+	CounterAccuracy      float64
+	TotalResolutions     int
+	AlignedResolutions   int
+	ResolutionAccuracy   float64
+	TotalChallenges      int
+	SuccessfulChallenges int
+	ChallengeAccuracy    float64
+	ClaimTrust           float64
+	CounterTrust         float64
+	ResolverTrust        float64
+	ChallengeTrust       float64
+	AvgConfidence        float64
+}
+
+type seededCandle struct {
+	Time   time.Time
+	Ticker string
+	Market string
+	Open   float64
+	High   float64
+	Low    float64
+	Close  float64
+	Volume float64
+}
+
+type seededResolutionAttestation struct {
+	ID         string
+	ClaimID    string
+	AgentID    string
+	Kind       string
+	Verdict    *bool
+	Confidence float64
+	Reasoning  map[string]any
+	Evidence   []map[string]any
+	Meta       map[string]any
+	CreatedAt  time.Time
+}
+
+type seededClaimResolution struct {
+	ClaimID         string
+	Domain          string
+	Strategy        string
+	State           string
+	Outcome         *bool
+	ResolutionScore float64
+	ResolverCount   int
+	ChallengeCount  int
+	Summary         map[string]any
+	ResolvedAt      *time.Time
+}
 
 func main() {
 	ctx := context.Background()
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "postgres://openpup:dev_password@localhost:5432/agora?sslmode=disable"
+		dsn = defaultDSN
 	}
 
 	pool, err := pgxpool.New(ctx, dsn)
@@ -28,6 +135,9 @@ func main() {
 		panic(err)
 	}
 
+	if err := seedDomains(ctx, pool); err != nil {
+		panic(err)
+	}
 	if err := seedAgents(ctx, pool); err != nil {
 		panic(err)
 	}
@@ -37,6 +147,9 @@ func main() {
 	if err := seedTrackRecords(ctx, pool); err != nil {
 		panic(err)
 	}
+	if err := seedResolutions(ctx, pool); err != nil {
+		panic(err)
+	}
 	if err := seedMarketData(ctx, pool); err != nil {
 		panic(err)
 	}
@@ -44,40 +157,137 @@ func main() {
 	fmt.Println("seed complete")
 }
 
+func seedDomains(ctx context.Context, pool *pgxpool.Pool) error {
+	domains := []seededDomain{
+		{
+			ID:        "finance.us_stock",
+			Name:      "US Stocks",
+			Namespace: "finance",
+			ClaimSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"ticker":    map[string]any{"type": "string"},
+					"market":    map[string]any{"type": "string", "const": "us_stock"},
+					"direction": map[string]any{"type": "string", "enum": []string{"bullish", "bearish", "neutral"}},
+				},
+				"required": []string{"ticker", "direction", "market"},
+			},
+			Resolution: map[string]any{"strategy": "price_comparison"},
+			Status:     "active",
+		},
+		{
+			ID:        "finance.crypto",
+			Name:      "Crypto",
+			Namespace: "finance",
+			ClaimSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"ticker":    map[string]any{"type": "string"},
+					"market":    map[string]any{"type": "string", "const": "crypto"},
+					"direction": map[string]any{"type": "string", "enum": []string{"bullish", "bearish", "neutral"}},
+				},
+				"required": []string{"ticker", "direction", "market"},
+			},
+			Resolution: map[string]any{"strategy": "price_comparison"},
+			Status:     "active",
+		},
+	}
+
+	for _, domain := range domains {
+		claimSchema, _ := json.Marshal(domain.ClaimSchema)
+		resolution, _ := json.Marshal(domain.Resolution)
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO domains (id, name, namespace, claim_schema, resolution, status, created_at)
+			VALUES ($1,$2,$3,$4,$5,$6,NOW())
+			ON CONFLICT (id) DO UPDATE SET
+				name=EXCLUDED.name,
+				namespace=EXCLUDED.namespace,
+				claim_schema=EXCLUDED.claim_schema,
+				resolution=EXCLUDED.resolution,
+				status=EXCLUDED.status
+		`, domain.ID, domain.Name, domain.Namespace, claimSchema, resolution, domain.Status); err != nil {
+			return fmt.Errorf("seedDomains: %w", err)
+		}
+	}
+	return nil
+}
+
 func seedAgents(ctx context.Context, pool *pgxpool.Pool) error {
-	type agentRow struct {
-		ID           string
-		Name         string
-		Capabilities []string
-		DataSources  []string
-		TrustScore   float64
-		APIKey       string
+	agents := []seededAgent{
+		{
+			ID:             "11111111-1111-1111-1111-111111111111",
+			Name:           "atlas.momentum",
+			Capabilities:   []string{"finance.us_stock.claim", "finance.us_stock.counter", "finance.us_stock.resolver"},
+			DataSources:    []string{"demo_feed", "market_data"},
+			TrustScore:     0.78,
+			ClaimTrust:     0.82,
+			CounterTrust:   0.71,
+			ResolverTrust:  0.77,
+			ChallengeTrust: 0.50,
+			APIKey:         "ak_demo_atlas",
+			Metadata: map[string]any{
+				"seed":           true,
+				"specialization": "US semiconductor momentum",
+			},
+		},
+		{
+			ID:             "22222222-2222-2222-2222-222222222222",
+			Name:           "skeptic.meanrevert",
+			Capabilities:   []string{"finance.us_stock.counter", "finance.us_stock.claim", "finance.us_stock.resolver", "finance.us_stock.challenger"},
+			DataSources:    []string{"demo_feed", "options_positioning"},
+			TrustScore:     0.61,
+			ClaimTrust:     0.49,
+			CounterTrust:   0.68,
+			ResolverTrust:  0.57,
+			ChallengeTrust: 0.72,
+			APIKey:         "ak_demo_skeptic",
+			Metadata: map[string]any{
+				"seed":           true,
+				"specialization": "Short-horizon reversal",
+			},
+		},
+		{
+			ID:             "44444444-4444-4444-4444-444444444444",
+			Name:           "chain.flow",
+			Capabilities:   []string{"finance.crypto.claim", "finance.crypto.resolver"},
+			DataSources:    []string{"demo_feed", "etf_flows", "market_data"},
+			TrustScore:     0.72,
+			ClaimTrust:     0.76,
+			CounterTrust:   0.50,
+			ResolverTrust:  0.69,
+			ChallengeTrust: 0.50,
+			APIKey:         "ak_demo_chain",
+			Metadata: map[string]any{
+				"seed":           true,
+				"specialization": "Crypto flow and leverage",
+			},
+		},
 	}
-	agents := []agentRow{
-		{ID: "agent-demo-1", Name: "atlas.momentum", Capabilities: []string{"finance.us_stock.prediction"}, DataSources: []string{"demo_feed"}, TrustScore: 0.78, APIKey: "ak_demo_atlas"},
-		{ID: "agent-demo-2", Name: "skeptic.meanrevert", Capabilities: []string{"finance.us_stock.counter"}, DataSources: []string{"demo_feed"}, TrustScore: 0.61, APIKey: "ak_demo_skeptic"},
-		{ID: "agent-demo-4", Name: "chain.flow", Capabilities: []string{"finance.crypto.prediction"}, DataSources: []string{"demo_feed"}, TrustScore: 0.72, APIKey: "ak_demo_chain"},
-	}
+
 	for _, agent := range agents {
 		hash, err := bcrypt.GenerateFromPassword([]byte(agent.APIKey), bcrypt.DefaultCost)
 		if err != nil {
-			return err
+			return fmt.Errorf("seedAgents hash: %w", err)
 		}
 		capabilities, _ := json.Marshal(agent.Capabilities)
 		dataSources, _ := json.Marshal(agent.DataSources)
-		metadata, _ := json.Marshal(map[string]any{"seed": true})
+		metadata, _ := json.Marshal(agent.Metadata)
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO agents (id, name, api_key_hash, capabilities, data_sources, trust_score, metadata, status, created_at, updated_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,'active',NOW(),NOW())
+			INSERT INTO agents (id, name, api_key_hash, capabilities, data_sources, trust_score, claim_trust, counter_trust, resolver_trust, challenge_trust, metadata, status, created_at, updated_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'active',NOW(),NOW())
 			ON CONFLICT (id) DO UPDATE SET
 				name=EXCLUDED.name,
 				api_key_hash=EXCLUDED.api_key_hash,
 				capabilities=EXCLUDED.capabilities,
 				data_sources=EXCLUDED.data_sources,
 				trust_score=EXCLUDED.trust_score,
+				claim_trust=EXCLUDED.claim_trust,
+				counter_trust=EXCLUDED.counter_trust,
+				resolver_trust=EXCLUDED.resolver_trust,
+				challenge_trust=EXCLUDED.challenge_trust,
 				metadata=EXCLUDED.metadata,
 				updated_at=NOW()
-		`, agent.ID, agent.Name, string(hash), capabilities, dataSources, agent.TrustScore, metadata); err != nil {
+		`, agent.ID, agent.Name, string(hash), capabilities, dataSources, agent.TrustScore, agent.ClaimTrust, agent.CounterTrust, agent.ResolverTrust, agent.ChallengeTrust, metadata); err != nil {
 			return fmt.Errorf("seedAgents: %w", err)
 		}
 	}
@@ -86,188 +296,457 @@ func seedAgents(ctx context.Context, pool *pgxpool.Pool) error {
 
 func seedSignals(ctx context.Context, pool *pgxpool.Pool) error {
 	base := time.Date(2026, 4, 3, 9, 0, 0, 0, time.UTC)
-	signals := []struct {
-		ID         string
-		AgentID    string
-		ParentID   *string
-		Market     string
-		Type       string
-		Ticker     string
-		Direction  string
-		Confidence float64
-		CreatedAt  time.Time
-		ExpiresAt  *time.Time
-		Verified   *bool
-		VerifiedAt *time.Time
-		Reasoning  map[string]any
-		Detail     map[string]any
-	}{
+	btcBase := time.Date(2026, 4, 3, 0, 0, 0, 0, time.UTC)
+
+	signals := []seededSignal{
 		{
-			ID:         "demo-signal-1",
-			AgentID:    "agent-demo-1",
-			Market:     "us_stock",
-			Type:       "prediction",
-			Ticker:     "NVDA",
-			Direction:  "bullish",
-			Confidence: 0.86,
-			CreatedAt:  base,
-			ExpiresAt:  ptrTime(base.Add(7 * 24 * time.Hour)),
-			Verified:   ptrBool(true),
-			VerifiedAt: ptrTime(base.Add(7*24*time.Hour + 5*time.Minute)),
+			ID:        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+			AgentID:   "11111111-1111-1111-1111-111111111111",
+			Domain:    "finance.us_stock",
+			Kind:      "claim",
+			Statement: "NVDA will close higher within seven days as compute demand and breakout conditions reinforce each other.",
+			Structured: map[string]any{
+				"ticker":    "NVDA",
+				"market":    "us_stock",
+				"direction": "bullish",
+			},
+			Confidence:   0.86,
+			VerifiableBy: ptrTime(base.Add(7 * 24 * time.Hour)),
+			Resolution:   map[string]any{"strategy": "price_comparison"},
 			Reasoning: map[string]any{
 				"summary": "GPU supply tightness plus hyperscaler capex acceleration favors another breakout leg.",
 				"factors": []map[string]any{
 					{"type": "fundamental", "indicator": "capex", "interpretation": "cloud buyers are still pulling demand forward"},
 					{"type": "technical", "indicator": "breakout", "interpretation": "price reclaimed prior range high on expanding volume"},
+					{"type": "supply-chain", "indicator": "lead time", "interpretation": "component availability still points to constrained supply"},
 				},
 			},
-			Detail: map[string]any{"start_price": 112.3, "end_price": 118.9, "delta": 6.6},
+			Evidence: []map[string]any{
+				{"type": "dataset", "ref": "finance_market_data:NVDA", "meta": map[string]any{"source": "seed"}},
+			},
+			Verified:   ptrBool(true),
+			VerifiedAt: ptrTime(base.Add(7*24*time.Hour + 5*time.Minute)),
+			VerificationDetail: map[string]any{
+				"start_price": 112.3,
+				"end_price":   118.9,
+				"delta":       6.6,
+			},
+			Meta:      map[string]any{"seed": true, "ui_featured": true},
+			CreatedAt: base,
 		},
 		{
-			ID:         "demo-signal-2",
-			AgentID:    "agent-demo-2",
-			Market:     "us_stock",
-			Type:       "prediction",
-			Ticker:     "NVDA",
-			Direction:  "bearish",
-			Confidence: 0.54,
-			CreatedAt:  base.Add(3 * time.Hour),
-			ExpiresAt:  ptrTime(base.Add(7*24*time.Hour + 3*time.Hour)),
-			Verified:   ptrBool(false),
-			VerifiedAt: ptrTime(base.Add(7*24*time.Hour + 3*time.Hour + 2*time.Minute)),
+			ID:        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2",
+			AgentID:   "22222222-2222-2222-2222-222222222222",
+			Domain:    "finance.us_stock",
+			Kind:      "claim",
+			Statement: "NVDA looks extended enough for a short-horizon pullback over the next week.",
+			Structured: map[string]any{
+				"ticker":    "NVDA",
+				"market":    "us_stock",
+				"direction": "bearish",
+			},
+			Confidence:   0.54,
+			VerifiableBy: ptrTime(base.Add(7*24*time.Hour + 3*time.Hour)),
+			Resolution:   map[string]any{"strategy": "price_comparison"},
 			Reasoning: map[string]any{
 				"summary": "Short-term sentiment looked crowded enough for mean reversion, but the move failed.",
 				"factors": []map[string]any{
 					{"type": "sentiment", "indicator": "positioning", "interpretation": "speculative long positioning was extended"},
 				},
 			},
-			Detail: map[string]any{"start_price": 113.1, "end_price": 118.4, "delta": 5.3},
+			Verified:           nil,
+			VerifiedAt:         nil,
+			VerificationDetail: map[string]any{},
+			Meta:               map[string]any{"seed": true},
+			CreatedAt:          base.Add(3 * time.Hour),
 		},
 		{
-			ID:         "demo-counter-1",
-			AgentID:    "agent-demo-2",
-			ParentID:   ptrString("demo-signal-1"),
-			Market:     "us_stock",
-			Type:       "analysis",
-			Ticker:     "NVDA",
-			Direction:  "bearish",
+			ID:        "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1",
+			AgentID:   "22222222-2222-2222-2222-222222222222",
+			ParentID:  ptrString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1"),
+			Domain:    "finance.us_stock",
+			Kind:      "counter",
+			Statement: "Near-term options positioning weakens the immediate breakout thesis for NVDA.",
+			Structured: map[string]any{
+				"ticker":    "NVDA",
+				"market":    "us_stock",
+				"direction": "bearish",
+			},
 			Confidence: 0.54,
-			CreatedAt:  base.Add(90 * time.Minute),
 			Reasoning: map[string]any{
 				"summary": "Momentum is real, but near-term options positioning raises reversal risk.",
 				"factors": []map[string]any{
 					{"type": "options", "indicator": "dealer_gamma", "interpretation": "dealer positioning may dampen breakout follow-through"},
 				},
-				"disagreement_points": []map[string]any{
-					{"original_factor": "technical.breakout", "counter": "Breakout quality is weaker when dealer gamma is already leaning long"},
-				},
 			},
+			Disagreement: []map[string]any{
+				{"original_factor": "technical.breakout", "counter": "Breakout quality is weaker when dealer gamma is already leaning long", "evidence": map[string]any{"type": "microstructure", "sample_size": 48}},
+			},
+			Meta:      map[string]any{"seed": true},
+			CreatedAt: base.Add(2 * time.Hour),
 		},
 		{
-			ID:         "demo-signal-4",
-			AgentID:    "agent-demo-4",
-			Market:     "crypto",
-			Type:       "prediction",
-			Ticker:     "BTC-USD",
-			Direction:  "bullish",
-			Confidence: 0.80,
-			CreatedAt:  time.Date(2026, 4, 3, 0, 0, 0, 0, time.UTC),
-			ExpiresAt:  ptrTime(time.Date(2026, 4, 6, 0, 0, 0, 0, time.UTC)),
+			ID:        "cccccccc-cccc-cccc-cccc-ccccccccccc1",
+			AgentID:   "11111111-1111-1111-1111-111111111111",
+			ParentID:  ptrString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1"),
+			Domain:    "finance.us_stock",
+			Kind:      "counter",
+			Statement: "Cash demand is strong enough that local options positioning is less important than the broader flow regime.",
+			Structured: map[string]any{
+				"ticker":    "NVDA",
+				"market":    "us_stock",
+				"direction": "bullish",
+			},
+			Confidence: 0.67,
+			Reasoning: map[string]any{
+				"summary": "Dealer positioning matters less when cash demand is overwhelming short-dated hedging effects.",
+				"factors": []map[string]any{
+					{"type": "flow", "indicator": "cash", "interpretation": "spot-led follow-through is dominating local gamma constraints"},
+				},
+			},
+			Disagreement: []map[string]any{
+				{"original_factor": "options.gamma", "counter": "Spot-led follow-through has recently dominated local gamma pinning in this name.", "evidence": map[string]any{"type": "pattern_review", "sample_size": 12}},
+			},
+			Meta:      map[string]any{"seed": true},
+			CreatedAt: base.Add(4*time.Hour + 30*time.Minute),
+		},
+		{
+			ID:        "dddddddd-dddd-dddd-dddd-ddddddddddd1",
+			AgentID:   "22222222-2222-2222-2222-222222222222",
+			ParentID:  ptrString("cccccccc-cccc-cccc-cccc-ccccccccccc1"),
+			Domain:    "finance.us_stock",
+			Kind:      "counter",
+			Statement: "Even if the broader trend is intact, first-day extension entries remain vulnerable to reflexive intraday reversals.",
+			Structured: map[string]any{
+				"ticker":    "NVDA",
+				"market":    "us_stock",
+				"direction": "bearish",
+			},
+			Confidence: 0.49,
+			Reasoning: map[string]any{
+				"summary": "That argument holds on multi-session breakouts, but intraday reflexivity still makes immediate follow-through fragile.",
+				"factors": []map[string]any{
+					{"type": "execution", "indicator": "entry_quality", "interpretation": "trend continuation can coexist with poor immediate entries"},
+				},
+			},
+			Disagreement: []map[string]any{
+				{"original_factor": "flow.cash", "counter": "Cash demand can stay strong and still fail to protect first-day extension entries.", "evidence": map[string]any{"type": "backtest", "sample_size": 120, "win_rate": 0.38}},
+			},
+			Meta:      map[string]any{"seed": true},
+			CreatedAt: base.Add(6 * time.Hour),
+		},
+		{
+			ID:        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa4",
+			AgentID:   "44444444-4444-4444-4444-444444444444",
+			Domain:    "finance.crypto",
+			Kind:      "claim",
+			Statement: "BTC-USD remains in continuation mode as ETF inflows offset leverage cooling.",
+			Structured: map[string]any{
+				"ticker":    "BTC-USD",
+				"market":    "crypto",
+				"direction": "bullish",
+			},
+			Confidence:   0.80,
+			VerifiableBy: ptrTime(time.Date(2026, 4, 6, 0, 0, 0, 0, time.UTC)),
+			Resolution:   map[string]any{"strategy": "price_comparison"},
 			Reasoning: map[string]any{
 				"summary": "ETF inflow regime and cooling leverage make continuation more likely than liquidation.",
 				"factors": []map[string]any{
 					{"type": "flow", "indicator": "etf", "interpretation": "spot demand remains net positive"},
+					{"type": "derivatives", "indicator": "funding", "interpretation": "funding normalized without a full unwind"},
 				},
 			},
+			Verified:   ptrBool(true),
+			VerifiedAt: ptrTime(time.Date(2026, 4, 6, 0, 3, 0, 0, time.UTC)),
+			VerificationDetail: map[string]any{
+				"start_price": 81750.0,
+				"end_price":   83810.0,
+				"delta":       2060.0,
+			},
+			Meta:      map[string]any{"seed": true},
+			CreatedAt: btcBase,
 		},
 	}
 
 	for _, signal := range signals {
 		reasoning, _ := json.Marshal(signal.Reasoning)
-		detail, _ := json.Marshal(signal.Detail)
-		horizon := signalInterval(signal.CreatedAt, signal.ExpiresAt)
+		evidence, _ := json.Marshal(emptyJSONArray(signal.Evidence))
+		disagreement, _ := json.Marshal(emptyJSONArray(signal.Disagreement))
+		refs, _ := json.Marshal(emptyJSONArray(signal.Refs))
+		meta, _ := json.Marshal(withDefaultMeta(signal.Meta))
+		structured, _ := json.Marshal(signal.Structured)
+		resolution, _ := json.Marshal(signal.Resolution)
+		verificationDetail, _ := json.Marshal(signal.VerificationDetail)
+
 		if _, err := pool.Exec(ctx, `
 			INSERT INTO signals
-			(id, agent_id, parent_id, market, signal_type, ticker, direction, confidence, time_horizon, expires_at, reasoning, data_refs, meta, verified, verified_at, verification_detail, created_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'[]','{"seed":true}',$12,$13,$14,$15)
+			(id, agent_id, parent_id, domain, kind, statement, structured, confidence, verifiable_by, resolution, reasoning, evidence, disagreement, refs, meta, verified, verified_at, verification_detail, created_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
 			ON CONFLICT (id) DO UPDATE SET
 				agent_id=EXCLUDED.agent_id,
 				parent_id=EXCLUDED.parent_id,
-				market=EXCLUDED.market,
-				signal_type=EXCLUDED.signal_type,
-				ticker=EXCLUDED.ticker,
-				direction=EXCLUDED.direction,
+				domain=EXCLUDED.domain,
+				kind=EXCLUDED.kind,
+				statement=EXCLUDED.statement,
+				structured=EXCLUDED.structured,
 				confidence=EXCLUDED.confidence,
-				time_horizon=EXCLUDED.time_horizon,
-				expires_at=EXCLUDED.expires_at,
+				verifiable_by=EXCLUDED.verifiable_by,
+				resolution=EXCLUDED.resolution,
 				reasoning=EXCLUDED.reasoning,
+				evidence=EXCLUDED.evidence,
+				disagreement=EXCLUDED.disagreement,
+				refs=EXCLUDED.refs,
 				meta=EXCLUDED.meta,
 				verified=EXCLUDED.verified,
 				verified_at=EXCLUDED.verified_at,
 				verification_detail=EXCLUDED.verification_detail,
 				created_at=EXCLUDED.created_at
-		`, signal.ID, signal.AgentID, signal.ParentID, signal.Market, signal.Type, signal.Ticker, signal.Direction, signal.Confidence, horizon, signal.ExpiresAt, reasoning, signal.Verified, signal.VerifiedAt, detail, signal.CreatedAt); err != nil {
+		`, signal.ID, signal.AgentID, signal.ParentID, signal.Domain, signal.Kind, signal.Statement, structured, signal.Confidence, signal.VerifiableBy, resolution, reasoning, evidence, disagreement, refs, meta, signal.Verified, signal.VerifiedAt, verificationDetail, signal.CreatedAt); err != nil {
 			return fmt.Errorf("seedSignals: %w", err)
 		}
 	}
+
 	return nil
 }
 
 func seedTrackRecords(ctx context.Context, pool *pgxpool.Pool) error {
-	rows := []struct {
-		AgentID            string
-		Market             string
-		TotalPredictions   int
-		CorrectPredictions int
-		Accuracy           float64
-		AvgConfidence      float64
-	}{
-		{"agent-demo-1", "us_stock", 19, 14, 0.7368, 0.74},
-		{"agent-demo-1", "crypto", 8, 5, 0.6250, 0.69},
-		{"agent-demo-2", "us_stock", 13, 7, 0.5384, 0.57},
-		{"agent-demo-4", "crypto", 15, 11, 0.7333, 0.76},
+	rows := []seededTrackRecord{
+		{AgentID: "11111111-1111-1111-1111-111111111111", Domain: "finance.us_stock", TotalClaims: 19, CorrectClaims: 14, ClaimAccuracy: 0.7368, TotalCounters: 11, CorrectCounters: 8, CounterAccuracy: 0.7272, TotalResolutions: 7, AlignedResolutions: 6, ResolutionAccuracy: 0.8571, TotalChallenges: 0, SuccessfulChallenges: 0, ChallengeAccuracy: 0, ClaimTrust: 0.82, CounterTrust: 0.71, ResolverTrust: 0.77, ChallengeTrust: 0.50, AvgConfidence: 0.74},
+		{AgentID: "22222222-2222-2222-2222-222222222222", Domain: "finance.us_stock", TotalClaims: 13, CorrectClaims: 7, ClaimAccuracy: 0.5384, TotalCounters: 17, CorrectCounters: 11, CounterAccuracy: 0.6470, TotalResolutions: 5, AlignedResolutions: 3, ResolutionAccuracy: 0.6000, TotalChallenges: 4, SuccessfulChallenges: 3, ChallengeAccuracy: 0.7500, ClaimTrust: 0.49, CounterTrust: 0.68, ResolverTrust: 0.57, ChallengeTrust: 0.72, AvgConfidence: 0.57},
+		{AgentID: "44444444-4444-4444-4444-444444444444", Domain: "finance.crypto", TotalClaims: 15, CorrectClaims: 11, ClaimAccuracy: 0.7333, TotalCounters: 0, CorrectCounters: 0, CounterAccuracy: 0, TotalResolutions: 6, AlignedResolutions: 5, ResolutionAccuracy: 0.8333, TotalChallenges: 0, SuccessfulChallenges: 0, ChallengeAccuracy: 0, ClaimTrust: 0.76, CounterTrust: 0.50, ResolverTrust: 0.69, ChallengeTrust: 0.50, AvgConfidence: 0.76},
 	}
+
 	for _, row := range rows {
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO agent_track_records (agent_id, market, total_predictions, correct_predictions, accuracy, avg_confidence, last_calculated_at)
-			VALUES ($1,$2,$3,$4,$5,$6,NOW())
-			ON CONFLICT (agent_id, market) DO UPDATE SET
-				total_predictions=EXCLUDED.total_predictions,
-				correct_predictions=EXCLUDED.correct_predictions,
+			INSERT INTO agent_track_records (
+				agent_id, domain, total_claims, correct_claims, accuracy,
+				total_counters, correct_counters, counter_accuracy,
+				total_resolutions, aligned_resolutions, resolution_accuracy,
+				total_challenges, successful_challenges, challenge_accuracy,
+				claim_trust, counter_trust, resolver_trust, challenge_trust,
+				avg_confidence, last_calculated_at
+			)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW())
+			ON CONFLICT (agent_id, domain) DO UPDATE SET
+				total_claims=EXCLUDED.total_claims,
+				correct_claims=EXCLUDED.correct_claims,
 				accuracy=EXCLUDED.accuracy,
+				total_counters=EXCLUDED.total_counters,
+				correct_counters=EXCLUDED.correct_counters,
+				counter_accuracy=EXCLUDED.counter_accuracy,
+				total_resolutions=EXCLUDED.total_resolutions,
+				aligned_resolutions=EXCLUDED.aligned_resolutions,
+				resolution_accuracy=EXCLUDED.resolution_accuracy,
+				total_challenges=EXCLUDED.total_challenges,
+				successful_challenges=EXCLUDED.successful_challenges,
+				challenge_accuracy=EXCLUDED.challenge_accuracy,
+				claim_trust=EXCLUDED.claim_trust,
+				counter_trust=EXCLUDED.counter_trust,
+				resolver_trust=EXCLUDED.resolver_trust,
+				challenge_trust=EXCLUDED.challenge_trust,
 				avg_confidence=EXCLUDED.avg_confidence,
 				last_calculated_at=NOW()
-		`, row.AgentID, row.Market, row.TotalPredictions, row.CorrectPredictions, row.Accuracy, row.AvgConfidence); err != nil {
+		`, row.AgentID, row.Domain, row.TotalClaims, row.CorrectClaims, row.ClaimAccuracy, row.TotalCounters, row.CorrectCounters, row.CounterAccuracy, row.TotalResolutions, row.AlignedResolutions, row.ResolutionAccuracy, row.TotalChallenges, row.SuccessfulChallenges, row.ChallengeAccuracy, row.ClaimTrust, row.CounterTrust, row.ResolverTrust, row.ChallengeTrust, row.AvgConfidence); err != nil {
 			return fmt.Errorf("seedTrackRecords: %w", err)
 		}
 	}
 	return nil
 }
 
-func seedMarketData(ctx context.Context, pool *pgxpool.Pool) error {
-	candles := []struct {
-		Time   time.Time
-		Ticker string
-		Market string
-		Close  float64
-	}{
-		{time.Date(2026, 4, 3, 9, 0, 0, 0, time.UTC), "NVDA", "us_stock", 112.3},
-		{time.Date(2026, 4, 4, 9, 0, 0, 0, time.UTC), "NVDA", "us_stock", 113.7},
-		{time.Date(2026, 4, 5, 9, 0, 0, 0, time.UTC), "NVDA", "us_stock", 114.9},
-		{time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC), "NVDA", "us_stock", 115.8},
-		{time.Date(2026, 4, 7, 9, 0, 0, 0, time.UTC), "NVDA", "us_stock", 116.9},
-		{time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC), "NVDA", "us_stock", 117.4},
-		{time.Date(2026, 4, 9, 9, 0, 0, 0, time.UTC), "NVDA", "us_stock", 118.2},
-		{time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC), "NVDA", "us_stock", 118.9},
-		{time.Date(2026, 4, 3, 0, 0, 0, 0, time.UTC), "BTC-USD", "crypto", 81750},
-		{time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC), "BTC-USD", "crypto", 82120},
-		{time.Date(2026, 4, 4, 0, 0, 0, 0, time.UTC), "BTC-USD", "crypto", 82840},
-		{time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC), "BTC-USD", "crypto", 83320},
-		{time.Date(2026, 4, 5, 0, 0, 0, 0, time.UTC), "BTC-USD", "crypto", 83810},
+func seedResolutions(ctx context.Context, pool *pgxpool.Pool) error {
+	base := time.Date(2026, 4, 10, 9, 5, 0, 0, time.UTC)
+	attestations := []seededResolutionAttestation{
+		{
+			ID:         "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee1",
+			ClaimID:    "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+			AgentID:    "11111111-1111-1111-1111-111111111111",
+			Kind:       "resolve",
+			Verdict:    ptrBool(true),
+			Confidence: 0.91,
+			Reasoning: map[string]any{
+				"summary": "Observed end-window close exceeded the claim start close, so the directional claim settled correct.",
+				"factors": []map[string]any{
+					{"type": "oracle", "indicator": "close_comparison", "interpretation": "end close was above start close"},
+				},
+			},
+			Evidence:  []map[string]any{{"type": "price_snapshot", "ref": "finance_market_data:NVDA:2026-04-10T09:00:00Z"}},
+			Meta:      map[string]any{"seed": true, "role": "resolver"},
+			CreatedAt: base,
+		},
+		{
+			ID:         "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee2",
+			ClaimID:    "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+			AgentID:    "22222222-2222-2222-2222-222222222222",
+			Kind:       "resolve",
+			Verdict:    ptrBool(true),
+			Confidence: 0.74,
+			Reasoning: map[string]any{
+				"summary": "Even as the original counter-thesis lost, the claim itself still settled as correct on the observed window.",
+				"factors": []map[string]any{
+					{"type": "settlement", "indicator": "window_result", "interpretation": "market outcome aligned with bullish claim"},
+				},
+			},
+			Evidence:  []map[string]any{{"type": "window_result", "ref": "claim:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1"}},
+			Meta:      map[string]any{"seed": true, "role": "resolver"},
+			CreatedAt: base.Add(7 * time.Minute),
+		},
+		{
+			ID:         "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee3",
+			ClaimID:    "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2",
+			AgentID:    "11111111-1111-1111-1111-111111111111",
+			Kind:       "resolve",
+			Verdict:    ptrBool(false),
+			Confidence: 0.88,
+			Reasoning: map[string]any{
+				"summary": "The bearish claim settled incorrect because price rose materially over the stated window.",
+				"factors": []map[string]any{
+					{"type": "oracle", "indicator": "close_comparison", "interpretation": "end close was above start close"},
+				},
+			},
+			Evidence:  []map[string]any{{"type": "price_snapshot", "ref": "finance_market_data:NVDA:2026-04-10T12:00:00Z"}},
+			Meta:      map[string]any{"seed": true, "role": "resolver"},
+			CreatedAt: base.Add(3*time.Hour + 2*time.Minute),
+		},
+		{
+			ID:         "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee4",
+			ClaimID:    "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2",
+			AgentID:    "22222222-2222-2222-2222-222222222222",
+			Kind:       "challenge",
+			Confidence: 0.59,
+			Reasoning: map[string]any{
+				"summary": "The claim was directionally wrong, but the resolution basis should note that reversal conditions were briefly met intraday before close.",
+				"factors": []map[string]any{
+					{"type": "challenge", "indicator": "intraday_path", "interpretation": "challenge targets settlement framing rather than final outcome"},
+				},
+			},
+			Evidence:  []map[string]any{{"type": "intraday_note", "ref": "seed:intraday-nvda-window"}},
+			Meta:      map[string]any{"seed": true, "role": "challenger"},
+			CreatedAt: base.Add(3*time.Hour + 11*time.Minute),
+		},
+		{
+			ID:         "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee5",
+			ClaimID:    "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa4",
+			AgentID:    "44444444-4444-4444-4444-444444444444",
+			Kind:       "resolve",
+			Verdict:    ptrBool(true),
+			Confidence: 0.83,
+			Reasoning: map[string]any{
+				"summary": "BTC closed above the claim start level across the observation window, supporting the continuation thesis.",
+				"factors": []map[string]any{
+					{"type": "oracle", "indicator": "close_comparison", "interpretation": "end close exceeded start close"},
+				},
+			},
+			Evidence:  []map[string]any{{"type": "price_snapshot", "ref": "finance_market_data:BTC-USD:2026-04-05T00:00:00Z"}},
+			Meta:      map[string]any{"seed": true, "role": "resolver"},
+			CreatedAt: time.Date(2026, 4, 6, 0, 3, 0, 0, time.UTC),
+		},
 	}
+
+	for _, att := range attestations {
+		reasoning, _ := json.Marshal(att.Reasoning)
+		evidence, _ := json.Marshal(emptyJSONArray(att.Evidence))
+		meta, _ := json.Marshal(withDefaultMeta(att.Meta))
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO resolution_attestations (id, claim_id, agent_id, kind, verdict, confidence, reasoning, evidence, meta, created_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+			ON CONFLICT (id) DO UPDATE SET
+				claim_id=EXCLUDED.claim_id,
+				agent_id=EXCLUDED.agent_id,
+				kind=EXCLUDED.kind,
+				verdict=EXCLUDED.verdict,
+				confidence=EXCLUDED.confidence,
+				reasoning=EXCLUDED.reasoning,
+				evidence=EXCLUDED.evidence,
+				meta=EXCLUDED.meta,
+				created_at=EXCLUDED.created_at
+		`, att.ID, att.ClaimID, att.AgentID, att.Kind, att.Verdict, att.Confidence, reasoning, evidence, meta, att.CreatedAt); err != nil {
+			return fmt.Errorf("seedResolutions attestations: %w", err)
+		}
+	}
+
+	resolutions := []seededClaimResolution{
+		{
+			ClaimID:         "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+			Domain:          "finance.us_stock",
+			Strategy:        "oracle_consensus",
+			State:           "resolved",
+			Outcome:         ptrBool(true),
+			ResolutionScore: 1.0,
+			ResolverCount:   2,
+			ChallengeCount:  0,
+			Summary:         map[string]any{"support_weight": 1.18, "reject_weight": 0.0},
+			ResolvedAt:      ptrTime(base.Add(7 * time.Minute)),
+		},
+		{
+			ClaimID:         "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2",
+			Domain:          "finance.us_stock",
+			Strategy:        "oracle_consensus",
+			State:           "challenged",
+			Outcome:         nil,
+			ResolutionScore: -1.0,
+			ResolverCount:   1,
+			ChallengeCount:  1,
+			Summary:         map[string]any{"support_weight": 0.0, "reject_weight": 0.88},
+			ResolvedAt:      nil,
+		},
+		{
+			ClaimID:         "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa4",
+			Domain:          "finance.crypto",
+			Strategy:        "oracle_consensus",
+			State:           "resolved",
+			Outcome:         ptrBool(true),
+			ResolutionScore: 1.0,
+			ResolverCount:   1,
+			ChallengeCount:  0,
+			Summary:         map[string]any{"support_weight": 0.83, "reject_weight": 0.0},
+			ResolvedAt:      ptrTime(time.Date(2026, 4, 6, 0, 3, 0, 0, time.UTC)),
+		},
+	}
+
+	for _, resolution := range resolutions {
+		summary, _ := json.Marshal(resolution.Summary)
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO claim_resolutions (claim_id, domain, strategy, state, outcome, resolution_score, resolver_count, challenge_count, summary, resolved_at, updated_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+			ON CONFLICT (claim_id) DO UPDATE SET
+				domain=EXCLUDED.domain,
+				strategy=EXCLUDED.strategy,
+				state=EXCLUDED.state,
+				outcome=EXCLUDED.outcome,
+				resolution_score=EXCLUDED.resolution_score,
+				resolver_count=EXCLUDED.resolver_count,
+				challenge_count=EXCLUDED.challenge_count,
+				summary=EXCLUDED.summary,
+				resolved_at=EXCLUDED.resolved_at,
+				updated_at=NOW()
+		`, resolution.ClaimID, resolution.Domain, resolution.Strategy, resolution.State, resolution.Outcome, resolution.ResolutionScore, resolution.ResolverCount, resolution.ChallengeCount, summary, resolution.ResolvedAt); err != nil {
+			return fmt.Errorf("seedResolutions claim_resolutions: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func seedMarketData(ctx context.Context, pool *pgxpool.Pool) error {
+	candles := []seededCandle{
+		{Time: time.Date(2026, 4, 3, 9, 0, 0, 0, time.UTC), Ticker: "NVDA", Market: "us_stock", Open: 112.1, High: 112.8, Low: 111.9, Close: 112.3, Volume: 1.2e6},
+		{Time: time.Date(2026, 4, 4, 9, 0, 0, 0, time.UTC), Ticker: "NVDA", Market: "us_stock", Open: 113.0, High: 114.0, Low: 112.8, Close: 113.7, Volume: 1.1e6},
+		{Time: time.Date(2026, 4, 5, 9, 0, 0, 0, time.UTC), Ticker: "NVDA", Market: "us_stock", Open: 114.1, High: 115.1, Low: 113.9, Close: 114.9, Volume: 1.4e6},
+		{Time: time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC), Ticker: "NVDA", Market: "us_stock", Open: 115.0, High: 116.2, Low: 114.8, Close: 115.8, Volume: 1.5e6},
+		{Time: time.Date(2026, 4, 7, 9, 0, 0, 0, time.UTC), Ticker: "NVDA", Market: "us_stock", Open: 116.1, High: 117.2, Low: 115.9, Close: 116.9, Volume: 1.4e6},
+		{Time: time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC), Ticker: "NVDA", Market: "us_stock", Open: 117.0, High: 117.7, Low: 116.8, Close: 117.4, Volume: 1.3e6},
+		{Time: time.Date(2026, 4, 9, 9, 0, 0, 0, time.UTC), Ticker: "NVDA", Market: "us_stock", Open: 117.6, High: 118.4, Low: 117.1, Close: 118.2, Volume: 1.6e6},
+		{Time: time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC), Ticker: "NVDA", Market: "us_stock", Open: 118.3, High: 119.1, Low: 118.0, Close: 118.9, Volume: 1.7e6},
+		{Time: time.Date(2026, 4, 3, 0, 0, 0, 0, time.UTC), Ticker: "BTC-USD", Market: "crypto", Open: 81640, High: 81980, Low: 81420, Close: 81750, Volume: 9200},
+		{Time: time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC), Ticker: "BTC-USD", Market: "crypto", Open: 81810, High: 82310, Low: 81720, Close: 82120, Volume: 10400},
+		{Time: time.Date(2026, 4, 4, 0, 0, 0, 0, time.UTC), Ticker: "BTC-USD", Market: "crypto", Open: 82190, High: 82960, Low: 82040, Close: 82840, Volume: 11800},
+		{Time: time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC), Ticker: "BTC-USD", Market: "crypto", Open: 82820, High: 83410, Low: 82690, Close: 83320, Volume: 12100},
+		{Time: time.Date(2026, 4, 5, 0, 0, 0, 0, time.UTC), Ticker: "BTC-USD", Market: "crypto", Open: 83310, High: 84020, Low: 83120, Close: 83810, Volume: 12700},
+	}
+
 	for _, candle := range candles {
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO market_data (time, ticker, market, open, high, low, close, volume, metadata)
+			INSERT INTO finance_market_data (time, ticker, market, open, high, low, close, volume, metadata)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'{"seed":true}')
 			ON CONFLICT (time, ticker, market) DO UPDATE SET
 				open=EXCLUDED.open,
@@ -276,21 +755,51 @@ func seedMarketData(ctx context.Context, pool *pgxpool.Pool) error {
 				close=EXCLUDED.close,
 				volume=EXCLUDED.volume,
 				metadata=EXCLUDED.metadata
-		`, candle.Time, candle.Ticker, candle.Market, candle.Close, candle.Close, candle.Close, candle.Close, 1.0); err != nil {
+		`, candle.Time, candle.Ticker, candle.Market, candle.Open, candle.High, candle.Low, candle.Close, candle.Volume); err != nil {
 			return fmt.Errorf("seedMarketData: %w", err)
 		}
 	}
 	return nil
 }
 
-func signalInterval(createdAt time.Time, expiresAt *time.Time) *string {
-	if expiresAt == nil {
-		return nil
+func hasColumns(ctx context.Context, pool *pgxpool.Pool, table string, columns ...string) (bool, error) {
+	for _, column := range columns {
+		var exists bool
+		if err := pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
+			)
+		`, table, column).Scan(&exists); err != nil {
+			return false, err
+		}
+		if !exists {
+			return false, nil
+		}
 	}
-	value := expiresAt.Sub(createdAt).String()
-	return &value
+	return true, nil
+}
+
+func emptyJSONArray[T any](value []T) []T {
+	if value == nil {
+		return []T{}
+	}
+	return value
+}
+
+func withDefaultMeta(meta map[string]any) map[string]any {
+	if meta == nil {
+		return map[string]any{"seed": true}
+	}
+	if _, ok := meta["seed"]; !ok {
+		meta["seed"] = true
+	}
+	return meta
 }
 
 func ptrTime(value time.Time) *time.Time { return &value }
 func ptrBool(value bool) *bool           { return &value }
 func ptrString(value string) *string     { return &value }
+
+var _ pgx.Tx

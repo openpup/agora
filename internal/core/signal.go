@@ -1,43 +1,57 @@
-package domain
+package core
 
 import "time"
 
-type SignalType string
-type Direction string
+type SignalKind string
 
 const (
-	SignalTypePrediction SignalType = "prediction"
-	SignalTypeAnalysis   SignalType = "analysis"
-	SignalTypeAlert      SignalType = "alert"
-	SignalTypeDataShare  SignalType = "data_share"
-)
-
-const (
-	DirectionBullish Direction = "bullish"
-	DirectionBearish Direction = "bearish"
-	DirectionNeutral Direction = "neutral"
+	SignalKindClaim   SignalKind = "claim"
+	SignalKindCounter SignalKind = "counter"
+	SignalKindData    SignalKind = "data"
+	SignalKindQuery   SignalKind = "query"
 )
 
 type Signal struct {
 	ID                 string              `json:"id"`
 	AgentID            string              `json:"agent_id"`
 	ParentID           *string             `json:"parent_id,omitempty"`
-	Market             Market              `json:"market"`
-	SignalType         SignalType          `json:"signal_type"`
-	Ticker             *string             `json:"ticker,omitempty"`
-	Direction          *Direction          `json:"direction,omitempty"`
-	Confidence         *float64            `json:"confidence,omitempty"`
-	TimeHorizon        *time.Duration      `json:"time_horizon,omitempty"`
-	ExpiresAt          *time.Time          `json:"expires_at,omitempty"`
+	Domain             string              `json:"domain"`
+	Kind               SignalKind          `json:"kind"`
+	Claim              Claim               `json:"claim"`
 	Reasoning          Reasoning           `json:"reasoning"`
-	DataRefs           []map[string]any    `json:"data_refs"`
-	Meta               map[string]any      `json:"meta"`
+	Evidence           []Evidence          `json:"evidence,omitempty"`
+	DisagreementPoints []DisagreementPoint `json:"disagreement_points,omitempty"`
+	Refs               []CrossRef          `json:"refs,omitempty"`
 	Verified           *bool               `json:"verified,omitempty"`
 	VerifiedAt         *time.Time          `json:"verified_at,omitempty"`
 	VerificationDetail map[string]any      `json:"verification_detail,omitempty"`
-	DisagreementPoints []DisagreementPoint `json:"disagreement_points,omitempty"`
+	Meta               map[string]any      `json:"meta,omitempty"`
 	CreatedAt          time.Time           `json:"created_at"`
 	CounterSignals     []Signal            `json:"counter_signals,omitempty"`
+}
+
+type Claim struct {
+	Statement    string         `json:"statement"`
+	Structured   map[string]any `json:"structured"`
+	Confidence   float64        `json:"confidence"`
+	VerifiableBy *time.Time     `json:"verifiable_by,omitempty"`
+	Resolution   *Resolution    `json:"resolution,omitempty"`
+}
+
+type Resolution struct {
+	Strategy string         `json:"strategy"`
+	Params   map[string]any `json:"params,omitempty"`
+}
+
+type Evidence struct {
+	Type string         `json:"type"`
+	Ref  string         `json:"ref"`
+	Meta map[string]any `json:"meta,omitempty"`
+}
+
+type CrossRef struct {
+	Domain   string `json:"domain"`
+	SignalID string `json:"signal_id"`
 }
 
 type Reasoning struct {
@@ -60,9 +74,8 @@ type DisagreementPoint struct {
 }
 
 type SignalFilter struct {
-	Market        Market       `json:"market"`
-	Tickers       []string     `json:"tickers,omitempty"`
-	SignalTypes   []SignalType `json:"signal_types,omitempty"`
+	Domain        string       `json:"domain"`
+	Kinds         []SignalKind `json:"kinds,omitempty"`
 	MinConfidence *float64     `json:"min_confidence,omitempty"`
 	MinTrustScore *float64     `json:"min_trust_score,omitempty"`
 }

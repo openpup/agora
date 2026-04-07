@@ -6,7 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/openpup/agora/internal/domain"
+	"github.com/openpup/agora/internal/core"
 	pkgerrors "github.com/openpup/agora/internal/pkg/errors"
 )
 
@@ -18,9 +18,9 @@ func NewAuthService(pool *pgxpool.Pool) *AuthService {
 	return &AuthService{pool: pool}
 }
 
-func (s *AuthService) Authenticate(ctx context.Context, apiKey string) (*domain.Agent, error) {
+func (s *AuthService) Authenticate(ctx context.Context, apiKey string) (*core.Agent, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, name, api_key_hash, capabilities, data_sources, trust_score, metadata, status, created_at, updated_at
+		SELECT id, name, api_key_hash, capabilities, data_sources, trust_score, claim_trust, counter_trust, resolver_trust, challenge_trust, metadata, status, created_at, updated_at
 		FROM agents WHERE status='active'
 	`)
 	if err != nil {
@@ -28,9 +28,9 @@ func (s *AuthService) Authenticate(ctx context.Context, apiKey string) (*domain.
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var agent domain.Agent
+		var agent core.Agent
 		var capabilities, dataSources, metadata []byte
-		if err := rows.Scan(&agent.ID, &agent.Name, &agent.APIKeyHash, &capabilities, &dataSources, &agent.TrustScore, &metadata, &agent.Status, &agent.CreatedAt, &agent.UpdatedAt); err != nil {
+		if err := rows.Scan(&agent.ID, &agent.Name, &agent.APIKeyHash, &capabilities, &dataSources, &agent.TrustScore, &agent.TrustProfile.ClaimTrust, &agent.TrustProfile.CounterTrust, &agent.TrustProfile.ResolverTrust, &agent.TrustProfile.ChallengeTrust, &metadata, &agent.Status, &agent.CreatedAt, &agent.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("auth_service.Authenticate scan: %w", err)
 		}
 		if err := CompareAPIKey(agent.APIKeyHash, apiKey); err == nil {

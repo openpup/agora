@@ -4,40 +4,42 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openpup/agora/internal/domain"
+	"github.com/openpup/agora/internal/core"
 )
 
-func TestValidateSignalInputPredictionRequiresCoreFields(t *testing.T) {
+func TestValidateSignalInputClaimRequiresConfidence(t *testing.T) {
 	input := CreateSignalInput{
-		Market:     domain.MarketUSStock,
-		SignalType: domain.SignalTypePrediction,
-		Reasoning: domain.Reasoning{
-			Factors: []domain.ReasoningFactor{{Type: "technical"}},
+		Domain: "finance.us_stock",
+		Kind:   core.SignalKindClaim,
+		Claim: core.Claim{
+			Statement:  "NVDA will rise",
+			Structured: map[string]any{"ticker": "NVDA", "direction": "bullish"},
+			Confidence: 0,
+		},
+		Reasoning: core.Reasoning{
+			Factors: []core.ReasoningFactor{{Type: "technical"}},
 			Summary: "signal thesis",
 		},
 	}
 
 	if err := validateSignalInput(input); err == nil {
-		t.Fatalf("expected validation error for missing prediction fields")
+		t.Fatalf("expected validation error for missing confidence")
 	}
 }
 
 func TestValidateSignalInputCounterRequiresDisagreement(t *testing.T) {
 	parentID := "parent-1"
-	ticker := "NVDA"
-	direction := domain.DirectionBearish
-	confidence := 0.72
-	horizon := 24 * time.Hour
 	input := CreateSignalInput{
-		ParentID:    &parentID,
-		Market:      domain.MarketUSStock,
-		SignalType:  domain.SignalTypePrediction,
-		Ticker:      &ticker,
-		Direction:   &direction,
-		Confidence:  &confidence,
-		TimeHorizon: &horizon,
-		Reasoning: domain.Reasoning{
-			Factors: []domain.ReasoningFactor{{Type: "technical"}},
+		ParentID: &parentID,
+		Domain:   "finance.us_stock",
+		Kind:     core.SignalKindCounter,
+		Claim: core.Claim{
+			Statement:  "NVDA will not rise",
+			Structured: map[string]any{"ticker": "NVDA", "direction": "bearish"},
+			Confidence: 0.72,
+		},
+		Reasoning: core.Reasoning{
+			Factors: []core.ReasoningFactor{{Type: "technical"}},
 			Summary: "counter thesis",
 		},
 	}
@@ -49,7 +51,7 @@ func TestValidateSignalInputCounterRequiresDisagreement(t *testing.T) {
 
 func TestDecodeCursorRoundTrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
-	cursorPayload := domain.SignalListCursor{CreatedAt: now, ID: "signal-1"}
+	cursorPayload := core.SignalListCursor{CreatedAt: now, ID: "signal-1"}
 	raw := "eyJjcmVhdGVkX2F0Ijoi" // invalid baseline check
 	if _, err := DecodeCursor(raw); err == nil {
 		t.Fatalf("expected invalid base64 cursor to fail")

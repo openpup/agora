@@ -10,57 +10,57 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/openpup/agora/internal/domain"
+	"github.com/openpup/agora/internal/core"
 )
 
 type ListSignalsParams struct {
-	Market        domain.Market
-	Ticker        *string
-	SignalType    *domain.SignalType
+	Domain        string
+	Kind          *core.SignalKind
 	AgentID       *string
 	MinConfidence *float64
 	Since         *time.Time
-	Cursor        *domain.SignalListCursor
+	Cursor        *core.SignalListCursor
 	Limit         int
 }
 
 type ConsensusRow struct {
-	Ticker     string
-	Direction  string
-	Confidence float64
-	TrustScore float64
 	SignalID   string
 	AgentID    string
+	Structured map[string]any
+	Confidence float64
+	TrustScore float64
 	CreatedAt  time.Time
 }
 
 type VerificationCandidate struct {
-	SignalID  string
-	Ticker    string
-	Market    domain.Market
-	Direction domain.Direction
-	CreatedAt time.Time
-	ExpiresAt time.Time
+	SignalID     string
+	Domain       string
+	Kind         core.SignalKind
+	Structured   map[string]any
+	Confidence   float64
+	VerifiableBy time.Time
+	CreatedAt    time.Time
 }
 
-type AgentMarketStats struct {
+type AgentDomainStats struct {
 	AgentID            string
-	Market             domain.Market
+	Domain             string
 	TotalPredictions   int
 	CorrectPredictions int
 	AvgConfidence      float64
 }
 
 type SignalRepository interface {
-	Create(context.Context, *domain.Signal) error
-	GetByID(context.Context, string) (*domain.Signal, error)
-	List(context.Context, ListSignalsParams) ([]domain.Signal, error)
-	ListCounters(context.Context, string) ([]domain.Signal, error)
+	Create(context.Context, *core.Signal) error
+	GetByID(context.Context, string) (*core.Signal, error)
+	List(context.Context, ListSignalsParams) ([]core.Signal, error)
+	ListAll(context.Context) ([]core.Signal, error)
+	ListCounters(context.Context, string) ([]core.Signal, error)
 	ListPendingVerification(context.Context, time.Time) ([]VerificationCandidate, error)
 	MarkVerified(context.Context, string, bool, map[string]any, time.Time) error
-	ListConsensusRows(context.Context, domain.Market, string, *time.Duration) ([]ConsensusRow, error)
-	ListOverviewRows(context.Context, domain.Market, int) ([]ConsensusRow, error)
-	ListAgentMarketStats(context.Context) ([]AgentMarketStats, error)
+	ListConsensusRows(context.Context, string, *time.Duration) ([]ConsensusRow, error)
+	ListOverviewRows(context.Context, string, int) ([]ConsensusRow, error)
+	ListAgentDomainStats(context.Context) ([]AgentDomainStats, error)
 }
 
 type PGSignalRepository struct {
@@ -71,45 +71,34 @@ func NewPGSignalRepository(pool *pgxpool.Pool) *PGSignalRepository {
 	return &PGSignalRepository{pool: pool}
 }
 
-func (r *PGSignalRepository) Create(ctx context.Context, signal *domain.Signal) error {
+func (r *PGSignalRepository) Create(ctx context.Context, signal *core.Signal) error {
 	reasoning, _ := json.Marshal(signal.Reasoning)
-	dataRefs, _ := json.Marshal(signal.DataRefs)
-	meta, _ := json.Marshal(signal.Meta)
+	evidence, _ := json.Marshal(signal.Evidence)
 	disagreement, _ := json.Marshal(signal.DisagreementPoints)
+	refs, _ := json.Marshal(signal.Refs)
+	meta, _ := json.Marshal(signal.Meta)
+	structured, _ := json.Marshal(signal.Claim.Structured)
+	var resolution []byte
+	if signal.Claim.Resolution != nil {
+		resolution, _ = json.Marshal(signal.Claim.Resolution)
+	}
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO signals
-		(id, agent_id, parent_id, market, signal_type, ticker, direction, confidence, time_horizon, expires_at, reasoning, data_refs, meta, verification_detail, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-	`, signal.ID, signal.AgentID, signal.ParentID, signal.Market, signal.SignalType, signal.Ticker, signal.Direction, signal.Confidence, durationToInterval(signal.TimeHorizon), signal.ExpiresAt, mergeReasoning(reasoning, disagreement), dataRefs, meta, nil, signal.CreatedAt)
+		(id, agent_id, parent_id, domain, kind, statement, structured, confidence, verifiable_by, resolution, reasoning, evidence, disagreement, refs, meta, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+	`, signal.ID, signal.AgentID, signal.ParentID, signal.Domain, signal.Kind,
+		signal.Claim.Statement, structured, signal.Claim.Confidence, signal.Claim.VerifiableBy, resolution,
+		reasoning, evidence, disagreement, refs, meta, signal.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("signal_repo.Create: %w", err)
 	}
 	return nil
 }
 
-func durationToInterval(d *time.Duration) *string {
-	if d == nil {
-		return nil
-	}
-	s := d.String()
-	return &s
-}
-
-func mergeReasoning(reasoning, disagreement []byte) []byte {
-	var payload map[string]any
-	_ = json.Unmarshal(reasoning, &payload)
-	var points []map[string]any
-	_ = json.Unmarshal(disagreement, &points)
-	if len(points) > 0 {
-		payload["disagreement_points"] = points
-	}
-	out, _ := json.Marshal(payload)
-	return out
-}
-
-func (r *PGSignalRepository) GetByID(ctx context.Context, id string) (*domain.Signal, error) {
+func (r *PGSignalRepository) GetByID(ctx context.Context, id string) (*core.Signal, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, agent_id, parent_id, market, signal_type, ticker, direction, confidence, time_horizon::text, expires_at, reasoning, data_refs, meta, verified, verified_at, verification_detail, created_at
+		SELECT id, agent_id, parent_id, domain, kind, statement, structured, confidence, verifiable_by, resolution,
+			reasoning, evidence, disagreement, refs, meta, verified, verified_at, verification_detail, created_at
 		FROM signals WHERE id=$1
 	`, id)
 	signal, err := scanSignal(row)
@@ -119,50 +108,38 @@ func (r *PGSignalRepository) GetByID(ctx context.Context, id string) (*domain.Si
 	return signal, nil
 }
 
-func scanSignal(row pgx.Row) (*domain.Signal, error) {
-	var s domain.Signal
-	var direction *string
-	var confidence *float64
-	var horizon *string
-	var reasoningRaw, dataRefsRaw, metaRaw []byte
-	var verificationRaw []byte
-	if err := row.Scan(&s.ID, &s.AgentID, &s.ParentID, &s.Market, &s.SignalType, &s.Ticker, &direction, &confidence, &horizon, &s.ExpiresAt, &reasoningRaw, &dataRefsRaw, &metaRaw, &s.Verified, &s.VerifiedAt, &verificationRaw, &s.CreatedAt); err != nil {
+func scanSignal(row pgx.Row) (*core.Signal, error) {
+	var s core.Signal
+	var structured, reasoning, evidence, disagreement, refs, meta, verificationRaw, resolution []byte
+	if err := row.Scan(
+		&s.ID, &s.AgentID, &s.ParentID, &s.Domain, &s.Kind,
+		&s.Claim.Statement, &structured, &s.Claim.Confidence, &s.Claim.VerifiableBy, &resolution,
+		&reasoning, &evidence, &disagreement, &refs, &meta,
+		&s.Verified, &s.VerifiedAt, &verificationRaw, &s.CreatedAt,
+	); err != nil {
 		return nil, err
 	}
-	if direction != nil {
-		parsed := domain.Direction(*direction)
-		s.Direction = &parsed
+	_ = json.Unmarshal(structured, &s.Claim.Structured)
+	if len(resolution) > 0 {
+		s.Claim.Resolution = &core.Resolution{}
+		_ = json.Unmarshal(resolution, s.Claim.Resolution)
 	}
-	s.Confidence = confidence
-	if horizon != nil && *horizon != "" {
-		if d, err := time.ParseDuration(strings.ReplaceAll(*horizon, " ", "")); err == nil {
-			s.TimeHorizon = &d
-		}
-	}
-	var reasoningPayload map[string]json.RawMessage
-	if err := json.Unmarshal(reasoningRaw, &reasoningPayload); err == nil {
-		_ = json.Unmarshal(reasoningPayload["factors"], &s.Reasoning.Factors)
-		_ = json.Unmarshal(reasoningPayload["summary"], &s.Reasoning.Summary)
-		_ = json.Unmarshal(reasoningPayload["disagreement_points"], &s.DisagreementPoints)
-	}
-	_ = json.Unmarshal(dataRefsRaw, &s.DataRefs)
-	_ = json.Unmarshal(metaRaw, &s.Meta)
+	_ = json.Unmarshal(reasoning, &s.Reasoning)
+	_ = json.Unmarshal(evidence, &s.Evidence)
+	_ = json.Unmarshal(disagreement, &s.DisagreementPoints)
+	_ = json.Unmarshal(refs, &s.Refs)
+	_ = json.Unmarshal(meta, &s.Meta)
 	_ = json.Unmarshal(verificationRaw, &s.VerificationDetail)
 	return &s, nil
 }
 
-func (r *PGSignalRepository) List(ctx context.Context, params ListSignalsParams) ([]domain.Signal, error) {
-	args := []any{params.Market}
-	where := []string{"market=$1"}
+func (r *PGSignalRepository) List(ctx context.Context, params ListSignalsParams) ([]core.Signal, error) {
+	args := []any{params.Domain}
+	where := []string{"domain=$1"}
 	argPos := 2
-	if params.Ticker != nil {
-		where = append(where, fmt.Sprintf("ticker=$%d", argPos))
-		args = append(args, *params.Ticker)
-		argPos++
-	}
-	if params.SignalType != nil {
-		where = append(where, fmt.Sprintf("signal_type=$%d", argPos))
-		args = append(args, *params.SignalType)
+	if params.Kind != nil {
+		where = append(where, fmt.Sprintf("kind=$%d", argPos))
+		args = append(args, *params.Kind)
 		argPos++
 	}
 	if params.AgentID != nil {
@@ -187,7 +164,8 @@ func (r *PGSignalRepository) List(ctx context.Context, params ListSignalsParams)
 	}
 	args = append(args, params.Limit)
 	query := fmt.Sprintf(`
-		SELECT id, agent_id, parent_id, market, signal_type, ticker, direction, confidence, time_horizon::text, expires_at, reasoning, data_refs, meta, verified, verified_at, verification_detail, created_at
+		SELECT id, agent_id, parent_id, domain, kind, statement, structured, confidence, verifiable_by, resolution,
+			reasoning, evidence, disagreement, refs, meta, verified, verified_at, verification_detail, created_at
 		FROM signals WHERE %s ORDER BY created_at DESC, id DESC LIMIT $%d
 	`, strings.Join(where, " AND "), argPos)
 	rows, err := r.pool.Query(ctx, query, args...)
@@ -195,7 +173,7 @@ func (r *PGSignalRepository) List(ctx context.Context, params ListSignalsParams)
 		return nil, fmt.Errorf("signal_repo.List: %w", err)
 	}
 	defer rows.Close()
-	var out []domain.Signal
+	var out []core.Signal
 	for rows.Next() {
 		s, err := scanSignal(rows)
 		if err != nil {
@@ -206,16 +184,39 @@ func (r *PGSignalRepository) List(ctx context.Context, params ListSignalsParams)
 	return out, nil
 }
 
-func (r *PGSignalRepository) ListCounters(ctx context.Context, parentID string) ([]domain.Signal, error) {
+func (r *PGSignalRepository) ListAll(ctx context.Context) ([]core.Signal, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, agent_id, parent_id, market, signal_type, ticker, direction, confidence, time_horizon::text, expires_at, reasoning, data_refs, meta, verified, verified_at, verification_detail, created_at
+		SELECT id, agent_id, parent_id, domain, kind, statement, structured, confidence, verifiable_by, resolution,
+			reasoning, evidence, disagreement, refs, meta, verified, verified_at, verification_detail, created_at
+		FROM signals
+		ORDER BY created_at DESC, id DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("signal_repo.ListAll: %w", err)
+	}
+	defer rows.Close()
+	var out []core.Signal
+	for rows.Next() {
+		s, err := scanSignal(rows)
+		if err != nil {
+			return nil, fmt.Errorf("signal_repo.ListAll scan: %w", err)
+		}
+		out = append(out, *s)
+	}
+	return out, nil
+}
+
+func (r *PGSignalRepository) ListCounters(ctx context.Context, parentID string) ([]core.Signal, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, agent_id, parent_id, domain, kind, statement, structured, confidence, verifiable_by, resolution,
+			reasoning, evidence, disagreement, refs, meta, verified, verified_at, verification_detail, created_at
 		FROM signals WHERE parent_id=$1 ORDER BY created_at ASC
 	`, parentID)
 	if err != nil {
 		return nil, fmt.Errorf("signal_repo.ListCounters: %w", err)
 	}
 	defer rows.Close()
-	var out []domain.Signal
+	var out []core.Signal
 	for rows.Next() {
 		s, err := scanSignal(rows)
 		if err != nil {
@@ -228,9 +229,9 @@ func (r *PGSignalRepository) ListCounters(ctx context.Context, parentID string) 
 
 func (r *PGSignalRepository) ListPendingVerification(ctx context.Context, cutoff time.Time) ([]VerificationCandidate, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, ticker, market, direction, created_at, expires_at
+		SELECT id, domain, kind, structured, confidence, verifiable_by, created_at
 		FROM signals
-		WHERE signal_type='prediction' AND verified IS NULL AND expires_at IS NOT NULL AND expires_at < $1
+		WHERE kind='claim' AND verified IS NULL AND verifiable_by IS NOT NULL AND verifiable_by < $1
 	`, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("signal_repo.ListPendingVerification: %w", err)
@@ -239,9 +240,11 @@ func (r *PGSignalRepository) ListPendingVerification(ctx context.Context, cutoff
 	var out []VerificationCandidate
 	for rows.Next() {
 		var row VerificationCandidate
-		if err := rows.Scan(&row.SignalID, &row.Ticker, &row.Market, &row.Direction, &row.CreatedAt, &row.ExpiresAt); err != nil {
+		var structured []byte
+		if err := rows.Scan(&row.SignalID, &row.Domain, &row.Kind, &structured, &row.Confidence, &row.VerifiableBy, &row.CreatedAt); err != nil {
 			return nil, fmt.Errorf("signal_repo.ListPendingVerification scan: %w", err)
 		}
+		_ = json.Unmarshal(structured, &row.Structured)
 		out = append(out, row)
 	}
 	return out, nil
@@ -258,13 +261,13 @@ func (r *PGSignalRepository) MarkVerified(ctx context.Context, signalID string, 
 	return nil
 }
 
-func (r *PGSignalRepository) ListConsensusRows(ctx context.Context, market domain.Market, ticker string, _ *time.Duration) ([]ConsensusRow, error) {
+func (r *PGSignalRepository) ListConsensusRows(ctx context.Context, domain string, _ *time.Duration) ([]ConsensusRow, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT s.ticker, s.direction, COALESCE(s.confidence, 0), a.trust_score, s.id, s.agent_id, s.created_at
+		SELECT s.id, s.agent_id, s.structured, s.confidence, a.trust_score, s.created_at
 		FROM signals s JOIN agents a ON a.id=s.agent_id
-		WHERE s.market=$1 AND s.ticker=$2 AND s.signal_type='prediction'
+		WHERE s.domain=$1 AND s.kind='claim'
 		ORDER BY s.created_at DESC
-	`, market, ticker)
+	`, domain)
 	if err != nil {
 		return nil, fmt.Errorf("signal_repo.ListConsensusRows: %w", err)
 	}
@@ -272,22 +275,24 @@ func (r *PGSignalRepository) ListConsensusRows(ctx context.Context, market domai
 	var out []ConsensusRow
 	for rows.Next() {
 		var row ConsensusRow
-		if err := rows.Scan(&row.Ticker, &row.Direction, &row.Confidence, &row.TrustScore, &row.SignalID, &row.AgentID, &row.CreatedAt); err != nil {
+		var structured []byte
+		if err := rows.Scan(&row.SignalID, &row.AgentID, &structured, &row.Confidence, &row.TrustScore, &row.CreatedAt); err != nil {
 			return nil, fmt.Errorf("signal_repo.ListConsensusRows scan: %w", err)
 		}
+		_ = json.Unmarshal(structured, &row.Structured)
 		out = append(out, row)
 	}
 	return out, nil
 }
 
-func (r *PGSignalRepository) ListOverviewRows(ctx context.Context, market domain.Market, limit int) ([]ConsensusRow, error) {
+func (r *PGSignalRepository) ListOverviewRows(ctx context.Context, domain string, limit int) ([]ConsensusRow, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT s.ticker, s.direction, COALESCE(s.confidence, 0), a.trust_score, s.id, s.agent_id, s.created_at
+		SELECT s.id, s.agent_id, s.structured, s.confidence, a.trust_score, s.created_at
 		FROM signals s JOIN agents a ON a.id=s.agent_id
-		WHERE s.market=$1 AND s.signal_type='prediction'
+		WHERE s.domain=$1 AND s.kind='claim'
 		ORDER BY s.created_at DESC
 		LIMIT $2
-	`, market, limit*25)
+	`, domain, limit*25)
 	if err != nil {
 		return nil, fmt.Errorf("signal_repo.ListOverviewRows: %w", err)
 	}
@@ -295,32 +300,34 @@ func (r *PGSignalRepository) ListOverviewRows(ctx context.Context, market domain
 	var out []ConsensusRow
 	for rows.Next() {
 		var row ConsensusRow
-		if err := rows.Scan(&row.Ticker, &row.Direction, &row.Confidence, &row.TrustScore, &row.SignalID, &row.AgentID, &row.CreatedAt); err != nil {
+		var structured []byte
+		if err := rows.Scan(&row.SignalID, &row.AgentID, &structured, &row.Confidence, &row.TrustScore, &row.CreatedAt); err != nil {
 			return nil, fmt.Errorf("signal_repo.ListOverviewRows scan: %w", err)
 		}
+		_ = json.Unmarshal(structured, &row.Structured)
 		out = append(out, row)
 	}
 	return out, nil
 }
 
-func (r *PGSignalRepository) ListAgentMarketStats(ctx context.Context) ([]AgentMarketStats, error) {
+func (r *PGSignalRepository) ListAgentDomainStats(ctx context.Context) ([]AgentDomainStats, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT agent_id, market,
-			COUNT(*) FILTER (WHERE signal_type='prediction')::int AS total_predictions,
-			COUNT(*) FILTER (WHERE signal_type='prediction' AND verified = TRUE)::int AS correct_predictions,
-			COALESCE(AVG(confidence) FILTER (WHERE signal_type='prediction' AND confidence IS NOT NULL), 0)::float8 AS avg_confidence
+		SELECT agent_id, domain,
+			COUNT(*) FILTER (WHERE kind='claim')::int AS total_predictions,
+			COUNT(*) FILTER (WHERE kind='claim' AND verified = TRUE)::int AS correct_predictions,
+			COALESCE(AVG(confidence) FILTER (WHERE kind='claim'), 0)::float8 AS avg_confidence
 		FROM signals
-		GROUP BY agent_id, market
+		GROUP BY agent_id, domain
 	`)
 	if err != nil {
-		return nil, fmt.Errorf("signal_repo.ListAgentMarketStats: %w", err)
+		return nil, fmt.Errorf("signal_repo.ListAgentDomainStats: %w", err)
 	}
 	defer rows.Close()
-	var out []AgentMarketStats
+	var out []AgentDomainStats
 	for rows.Next() {
-		var row AgentMarketStats
-		if err := rows.Scan(&row.AgentID, &row.Market, &row.TotalPredictions, &row.CorrectPredictions, &row.AvgConfidence); err != nil {
-			return nil, fmt.Errorf("signal_repo.ListAgentMarketStats scan: %w", err)
+		var row AgentDomainStats
+		if err := rows.Scan(&row.AgentID, &row.Domain, &row.TotalPredictions, &row.CorrectPredictions, &row.AvgConfidence); err != nil {
+			return nil, fmt.Errorf("signal_repo.ListAgentDomainStats scan: %w", err)
 		}
 		out = append(out, row)
 	}

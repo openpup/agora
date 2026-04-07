@@ -1,1 +1,2 @@
 DROP TABLE IF EXISTS signals;
+DROP TABLE IF EXISTS domains;

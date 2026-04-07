@@ -12,6 +12,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/openpup/agora/internal/config"
+	"github.com/openpup/agora/internal/domainplugin"
+	"github.com/openpup/agora/internal/domainplugin/finance"
 	"github.com/openpup/agora/internal/handler"
 	"github.com/openpup/agora/internal/middleware"
 	"github.com/openpup/agora/internal/pkg/cache"
@@ -65,19 +67,25 @@ func main() {
 		logger.Fatal("ensure streams failed", zap.Error(err))
 	}
 
+	// Domain plugin registry
+	pluginRegistry := domainplugin.NewRegistry()
+	financeMarketData := finance.NewMarketDataRepo(pool)
+	financePlugin := finance.NewPlugin(financeMarketData)
+	pluginRegistry.Register(financePlugin)
+
 	agentRepo := repository.NewPGAgentRepository(pool)
 	signalRepo := repository.NewPGSignalRepository(pool)
+	resolutionRepo := repository.NewPGResolutionRepository(pool)
 	subRepo := repository.NewPGSubscriptionRepository(pool)
-	marketRepo := repository.NewPGMarketDataRepository(pool)
 
 	agentService := service.NewAgentService(agentRepo, cfg.Auth.APIKeyPrefix)
 	authService := service.NewAuthService(pool)
 	signalService := service.NewSignalService(signalRepo, publisher)
 	subscriptionService := service.NewSubscriptionService(subRepo)
 	consensusService := service.NewConsensusService(signalRepo, redisClient)
-	trustService := service.NewTrustService(agentRepo, signalRepo)
-	marketDataService := service.NewMarketDataService(marketRepo)
-	verificationService := service.NewVerificationService(signalRepo, marketRepo, publisher)
+	trustService := service.NewTrustService(agentRepo, signalRepo, resolutionRepo)
+	verificationService := service.NewVerificationService(signalRepo, pluginRegistry, publisher)
+	resolutionService := service.NewResolutionService(resolutionRepo, signalRepo)
 	idempotencyTTL, err := time.ParseDuration(cfg.Auth.IdempotencyTTL)
 	if err != nil {
 		logger.Fatal("invalid idempotency ttl", zap.Error(err))
@@ -89,8 +97,9 @@ func main() {
 	signalHandler := handler.NewSignalHandler(signalService, idempotencyService)
 	subscriptionHandler := handler.NewSubscriptionHandler(subscriptionService, idempotencyService)
 	consensusHandler := handler.NewConsensusHandler(consensusService)
-	marketDataHandler := handler.NewMarketDataHandler(marketDataService)
+	resolutionHandler := handler.NewResolutionHandler(resolutionService, idempotencyService)
 	wsHandler := handler.NewWSHandler(authService, subscriptionService)
+	financeMarketDataHandler := handler.NewFinanceMarketDataHandler(financeMarketData)
 
 	h := server.Default(
 		server.WithHostPorts(fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)),
@@ -100,7 +109,6 @@ func main() {
 	h.Use(middleware.RequestID())
 	h.StaticFile("/", "./web/index.html")
 	h.StaticFile("/app.css", "./web/app.css")
-	h.StaticFile("/demo-data.js", "./web/demo-data.js")
 	h.StaticFile("/app.js", "./web/app.js")
 
 	h.GET("/healthz", healthHandler.Healthz)
@@ -109,11 +117,13 @@ func main() {
 	public := h.Group("/public/v1")
 	{
 		public.GET("/agents/:id/track-record", agentHandler.TrackRecord)
+		public.GET("/agents", agentHandler.ListPublic)
 		public.GET("/signals", signalHandler.List)
 		public.GET("/signals/:id", signalHandler.Get)
-		public.GET("/consensus/:ticker", consensusHandler.GetTicker)
+		public.GET("/claims/:id/resolution", resolutionHandler.GetByClaimID)
+		public.GET("/consensus", consensusHandler.GetConsensus)
 		public.GET("/consensus/overview", consensusHandler.Overview)
-		public.GET("/market-data/:ticker", marketDataHandler.Get)
+		public.GET("/finance/market-data", financeMarketDataHandler.List)
 	}
 
 	v1 := h.Group("/v1")
@@ -128,15 +138,16 @@ func main() {
 		v1.GET("/signals", signalHandler.List)
 		v1.GET("/signals/:id", signalHandler.Get)
 		v1.POST("/signals/:id/counter", signalHandler.CreateCounter)
+		v1.POST("/claims/:id/resolution", resolutionHandler.Submit)
+		v1.GET("/claims/:id/resolution", resolutionHandler.GetByClaimID)
 
 		v1.POST("/subscriptions", subscriptionHandler.Create)
 		v1.GET("/subscriptions", subscriptionHandler.List)
 		v1.DELETE("/subscriptions/:id", subscriptionHandler.Delete)
 
-		v1.GET("/consensus/:ticker", consensusHandler.GetTicker)
+		v1.GET("/consensus", consensusHandler.GetConsensus)
 		v1.GET("/consensus/overview", consensusHandler.Overview)
-
-		v1.GET("/market-data/:ticker", marketDataHandler.Get)
+		v1.GET("/finance/market-data", financeMarketDataHandler.List)
 	}
 
 	h.GET("/v1/stream", wsHandler.Stream)

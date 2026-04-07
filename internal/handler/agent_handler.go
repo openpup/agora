@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/cloudwego/hertz/pkg/app"
 
@@ -84,4 +85,19 @@ func (h *AgentHandler) TrackRecord(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	c.JSON(200, map[string]any{"agent_id": c.Param("id"), "records": records})
+}
+
+func (h *AgentHandler) ListPublic(ctx context.Context, c *app.RequestContext) {
+	limit := 20
+	if raw := c.Query("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 100 {
+			limit = parsed
+		}
+	}
+	agents, err := h.service.ListPublic(ctx, limit)
+	if err != nil {
+		writeError(c, 500, "AGENT_LIST_FAILED", err.Error())
+		return
+	}
+	c.JSON(200, map[string]any{"agents": agents})
 }

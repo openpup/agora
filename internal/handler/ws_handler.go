@@ -8,7 +8,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/hertz-contrib/websocket"
 
-	"github.com/openpup/agora/internal/domain"
+	"github.com/openpup/agora/internal/core"
 	"github.com/openpup/agora/internal/service"
 )
 
@@ -63,7 +63,7 @@ func (h *WSHandler) Stream(ctx context.Context, c *app.RequestContext) {
 	}
 }
 
-func (h *WSHandler) PushMatching(ctx context.Context, signal domain.Signal) error {
+func (h *WSHandler) PushMatching(ctx context.Context, signal core.Signal) error {
 	matches, err := h.subscriptions.Match(ctx, signal)
 	if err != nil {
 		return err

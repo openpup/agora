@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/openpup/agora/internal/domain"
+	"github.com/openpup/agora/internal/core"
 	pkgerrors "github.com/openpup/agora/internal/pkg/errors"
 	"github.com/openpup/agora/internal/pubsub"
 	"github.com/openpup/agora/internal/repository"
@@ -22,16 +22,14 @@ type SignalPublisher interface {
 type CreateSignalInput struct {
 	AgentID            string
 	ParentID           *string
-	Market             domain.Market
-	SignalType         domain.SignalType
-	Ticker             *string
-	Direction          *domain.Direction
-	Confidence         *float64
-	TimeHorizon        *time.Duration
-	Reasoning          domain.Reasoning
-	DataRefs           []map[string]any
+	Domain             string
+	Kind               core.SignalKind
+	Claim              core.Claim
+	Reasoning          core.Reasoning
+	Evidence           []core.Evidence
+	Refs               []core.CrossRef
 	Meta               map[string]any
-	DisagreementPoints []domain.DisagreementPoint
+	DisagreementPoints []core.DisagreementPoint
 }
 
 type SignalService struct {
@@ -43,38 +41,32 @@ func NewSignalService(repo repository.SignalRepository, publisher SignalPublishe
 	return &SignalService{repo: repo, publisher: publisher}
 }
 
-func (s *SignalService) Create(ctx context.Context, input CreateSignalInput) (*domain.Signal, error) {
+func (s *SignalService) Create(ctx context.Context, input CreateSignalInput) (*core.Signal, error) {
 	if err := validateSignalInput(input); err != nil {
 		return nil, err
 	}
 	now := time.Now().UTC()
-	signal := &domain.Signal{
+	signal := &core.Signal{
 		ID:                 uuid.NewString(),
 		AgentID:            input.AgentID,
 		ParentID:           input.ParentID,
-		Market:             input.Market,
-		SignalType:         input.SignalType,
-		Ticker:             input.Ticker,
-		Direction:          input.Direction,
-		Confidence:         input.Confidence,
-		TimeHorizon:        input.TimeHorizon,
+		Domain:             input.Domain,
+		Kind:               input.Kind,
+		Claim:              input.Claim,
 		Reasoning:          input.Reasoning,
-		DataRefs:           input.DataRefs,
+		Evidence:           input.Evidence,
+		Refs:               input.Refs,
 		Meta:               input.Meta,
 		DisagreementPoints: input.DisagreementPoints,
 		CreatedAt:          now,
-	}
-	if input.TimeHorizon != nil {
-		expiresAt := now.Add(*input.TimeHorizon)
-		signal.ExpiresAt = &expiresAt
 	}
 	if err := s.repo.Create(ctx, signal); err != nil {
 		return nil, fmt.Errorf("signal_service.Create persist: %w", err)
 	}
 	payload, _ := json.Marshal(signal)
-	subject := pubsub.SignalPublishedSubject(signal.Market, derefString(signal.Ticker))
+	subject := pubsub.SignalPublishedSubject(signal.Domain, string(signal.Kind))
 	if input.ParentID != nil {
-		subject = pubsub.SignalCounteredSubject(signal.Market, derefString(signal.Ticker))
+		subject = pubsub.SignalCounteredSubject(signal.Domain)
 	}
 	if err := s.publisher.PublishSignal(ctx, subject, payload); err != nil {
 		return nil, fmt.Errorf("signal_service.Create publish: %w", err)
@@ -83,15 +75,15 @@ func (s *SignalService) Create(ctx context.Context, input CreateSignalInput) (*d
 }
 
 func validateSignalInput(input CreateSignalInput) error {
-	if !input.Market.Valid() {
-		return fmt.Errorf("signal_service.validateSignalInput market: %w", pkgerrors.ErrInvalidInput)
+	if input.Domain == "" {
+		return fmt.Errorf("signal_service.validateSignalInput domain: %w", pkgerrors.ErrInvalidInput)
 	}
 	if len(input.Reasoning.Factors) == 0 || input.Reasoning.Summary == "" {
 		return fmt.Errorf("signal_service.validateSignalInput reasoning: %w", pkgerrors.ErrInvalidInput)
 	}
-	if input.SignalType == domain.SignalTypePrediction {
-		if input.Ticker == nil || input.Direction == nil || input.Confidence == nil || input.TimeHorizon == nil {
-			return fmt.Errorf("signal_service.validateSignalInput prediction fields: %w", pkgerrors.ErrInvalidInput)
+	if input.Kind == core.SignalKindClaim {
+		if input.Claim.Confidence <= 0 {
+			return fmt.Errorf("signal_service.validateSignalInput claim confidence: %w", pkgerrors.ErrInvalidInput)
 		}
 	}
 	if input.ParentID != nil && len(input.DisagreementPoints) == 0 {
@@ -100,7 +92,7 @@ func validateSignalInput(input CreateSignalInput) error {
 	return nil
 }
 
-func (s *SignalService) GetByID(ctx context.Context, signalID string) (*domain.Signal, error) {
+func (s *SignalService) GetByID(ctx context.Context, signalID string) (*core.Signal, error) {
 	signal, err := s.repo.GetByID(ctx, signalID)
 	if err != nil {
 		return nil, fmt.Errorf("signal_service.GetByID get signal: %w", err)
@@ -113,7 +105,7 @@ func (s *SignalService) GetByID(ctx context.Context, signalID string) (*domain.S
 	return signal, nil
 }
 
-func (s *SignalService) List(ctx context.Context, params repository.ListSignalsParams) ([]domain.Signal, *string, error) {
+func (s *SignalService) List(ctx context.Context, params repository.ListSignalsParams) ([]core.Signal, *string, error) {
 	signals, err := s.repo.List(ctx, params)
 	if err != nil {
 		return nil, nil, fmt.Errorf("signal_service.List: %w", err)
@@ -122,12 +114,12 @@ func (s *SignalService) List(ctx context.Context, params repository.ListSignalsP
 		return signals, nil, nil
 	}
 	last := signals[len(signals)-1]
-	cursorPayload, _ := json.Marshal(domain.SignalListCursor{CreatedAt: last.CreatedAt, ID: last.ID})
+	cursorPayload, _ := json.Marshal(core.SignalListCursor{CreatedAt: last.CreatedAt, ID: last.ID})
 	cursor := base64.StdEncoding.EncodeToString(cursorPayload)
 	return signals, &cursor, nil
 }
 
-func DecodeCursor(cursor string) (*domain.SignalListCursor, error) {
+func DecodeCursor(cursor string) (*core.SignalListCursor, error) {
 	if cursor == "" {
 		return nil, nil
 	}
@@ -135,16 +127,9 @@ func DecodeCursor(cursor string) (*domain.SignalListCursor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("signal_service.DecodeCursor decode: %w", err)
 	}
-	var parsed domain.SignalListCursor
+	var parsed core.SignalListCursor
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, fmt.Errorf("signal_service.DecodeCursor unmarshal: %w", err)
 	}
 	return &parsed, nil
-}
-
-func derefString(value *string) string {
-	if value == nil {
-		return "all"
-	}
-	return *value
 }

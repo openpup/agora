@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/openpup/agora/internal/domain"
+	"github.com/openpup/agora/internal/core"
 	pkgerrors "github.com/openpup/agora/internal/pkg/errors"
 	"github.com/openpup/agora/internal/repository"
 )
@@ -25,7 +25,7 @@ func NewAgentService(repo repository.AgentRepository, apiKeyPrefix string) *Agen
 	return &AgentService{repo: repo, apiKeyPrefix: apiKeyPrefix}
 }
 
-func (s *AgentService) Register(ctx context.Context, name string, capabilities, dataSources []string, metadata map[string]any) (*domain.Agent, string, error) {
+func (s *AgentService) Register(ctx context.Context, name string, capabilities, dataSources []string, metadata map[string]any) (*core.Agent, string, error) {
 	apiKey, err := s.generateAPIKey()
 	if err != nil {
 		return nil, "", fmt.Errorf("agent_service.Register generate api key: %w", err)
@@ -35,17 +35,23 @@ func (s *AgentService) Register(ctx context.Context, name string, capabilities, 
 		return nil, "", fmt.Errorf("agent_service.Register hash key: %w", err)
 	}
 	now := time.Now().UTC()
-	agent := &domain.Agent{
+	agent := &core.Agent{
 		ID:           uuid.NewString(),
 		Name:         name,
 		APIKeyHash:   string(hash),
 		Capabilities: capabilities,
 		DataSources:  dataSources,
 		TrustScore:   0.5,
-		Metadata:     metadata,
-		Status:       domain.AgentStatusActive,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		TrustProfile: core.AgentTrustProfile{
+			ClaimTrust:     0.5,
+			CounterTrust:   0.5,
+			ResolverTrust:  0.5,
+			ChallengeTrust: 0.5,
+		},
+		Metadata:  metadata,
+		Status:    core.AgentStatusActive,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	if err := s.repo.Create(ctx, agent); err != nil {
 		return nil, "", fmt.Errorf("agent_service.Register create agent: %w", err)
@@ -53,7 +59,7 @@ func (s *AgentService) Register(ctx context.Context, name string, capabilities, 
 	return agent, apiKey, nil
 }
 
-func (s *AgentService) GetMe(ctx context.Context, agentID string) (*domain.Agent, error) {
+func (s *AgentService) GetMe(ctx context.Context, agentID string) (*core.Agent, error) {
 	agent, err := s.repo.GetByID(ctx, agentID)
 	if err != nil {
 		return nil, fmt.Errorf("agent_service.GetMe: %w", err)
@@ -61,7 +67,7 @@ func (s *AgentService) GetMe(ctx context.Context, agentID string) (*domain.Agent
 	return agent, nil
 }
 
-func (s *AgentService) Update(ctx context.Context, agentID, name string, capabilities, dataSources []string, metadata map[string]any) (*domain.Agent, error) {
+func (s *AgentService) Update(ctx context.Context, agentID, name string, capabilities, dataSources []string, metadata map[string]any) (*core.Agent, error) {
 	agent, err := s.repo.GetByID(ctx, agentID)
 	if err != nil {
 		return nil, fmt.Errorf("agent_service.Update get agent: %w", err)
@@ -85,7 +91,7 @@ func (s *AgentService) Update(ctx context.Context, agentID, name string, capabil
 	return agent, nil
 }
 
-func (s *AgentService) GetTrackRecord(ctx context.Context, agentID string) ([]domain.AgentTrackRecord, error) {
+func (s *AgentService) GetTrackRecord(ctx context.Context, agentID string) ([]core.AgentTrackRecord, error) {
 	records, err := s.repo.ListTrackRecords(ctx, agentID)
 	if err != nil {
 		return nil, fmt.Errorf("agent_service.GetTrackRecord: %w", err)
@@ -93,9 +99,15 @@ func (s *AgentService) GetTrackRecord(ctx context.Context, agentID string) ([]do
 	return records, nil
 }
 
-func (s *AgentService) Authenticate(ctx context.Context, apiKey string) (*domain.Agent, error) {
-	// BCrypt hashes are salted, so the repo lookup is not useful; scan active agents is too expensive.
-	// Use SHA256 fingerprinting in Redis/headers later if needed. For Phase 1, load by iterating over candidate hashes is avoided.
+func (s *AgentService) ListPublic(ctx context.Context, limit int) ([]core.Agent, error) {
+	agents, err := s.repo.ListPublic(ctx, limit)
+	if err != nil {
+		return nil, fmt.Errorf("agent_service.ListPublic: %w", err)
+	}
+	return agents, nil
+}
+
+func (s *AgentService) Authenticate(ctx context.Context, apiKey string) (*core.Agent, error) {
 	_ = sha256.Sum256([]byte(apiKey))
 	return nil, fmt.Errorf("agent_service.Authenticate: %w", pkgerrors.ErrUnauthorized)
 }
