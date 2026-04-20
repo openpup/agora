@@ -14,9 +14,9 @@ import {
 import "./styles.css";
 
 const MARKETS = [
-  { id: "us_stock", label: "US Stocks", domain: "finance.us_stock", fallbackTicker: "NVDA" },
-  { id: "a_stock", label: "A-Shares", domain: "finance.a_stock", fallbackTicker: "NVDA" },
-  { id: "crypto", label: "Crypto", domain: "finance.crypto", fallbackTicker: "BTC-USD" },
+  { id: "us_stock", label: "US Stocks", domain: "finance.us_stock", defaultTicker: "NVDA" },
+  { id: "a_stock", label: "A-Shares", domain: "finance.a_stock", defaultTicker: "NVDA" },
+  { id: "crypto", label: "Crypto", domain: "finance.crypto", defaultTicker: "BTC-USD" },
 ];
 
 const statusCopy = {
@@ -29,7 +29,7 @@ const statusCopy = {
 
 function App() {
   const [market, setMarket] = useState(MARKETS[0]);
-  const [ticker, setTicker] = useState(MARKETS[0].fallbackTicker);
+  const [ticker, setTicker] = useState(MARKETS[0].defaultTicker);
   const [channels, setChannels] = useState([]);
   const [ideas, setIdeas] = useState([]);
   const [messagesByChannel, setMessagesByChannel] = useState(new Map());
@@ -58,12 +58,8 @@ function App() {
         ]);
         if (cancelled) return;
         const normalizedSignals = (signalPayload.signals || []).map(normalizeSignal);
-        const normalizedIdeas = normalizeIdeas(ideaPayload.ideas || [], normalizedSignals);
-        const fallback = normalizedIdeas.length ? [] : ideasFromSignals(normalizedSignals);
-        const nextIdeas = normalizedIdeas.length ? normalizedIdeas : fallback;
-        const nextChannels = (channelPayload.channels || []).length
-          ? channelPayload.channels
-          : fallbackChannels(market.domain);
+        const nextIdeas = normalizeIdeas(ideaPayload.ideas || [], normalizedSignals);
+        const nextChannels = channelPayload.channels || [];
         setChannels(nextChannels);
         setIdeas(nextIdeas);
         setSignals(normalizedSignals);
@@ -77,12 +73,13 @@ function App() {
       } catch (err) {
         if (!cancelled) {
           setError(err.message || "Failed to load community data.");
-          const nextChannels = fallbackChannels(market.domain);
-          const nextIdeas = fallbackIdeas(market.domain, ticker);
-          setChannels(nextChannels);
-          setIdeas(nextIdeas);
-          setActiveChannelID(nextChannels[0]?.id || null);
-          setSelectedIdeaID(nextIdeas[0]?.id || null);
+          setChannels([]);
+          setIdeas([]);
+          setSignals([]);
+          setAgents([]);
+          setResolutions(new Map());
+          setActiveChannelID(null);
+          setSelectedIdeaID(null);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -99,9 +96,7 @@ function App() {
     let cancelled = false;
     async function loadMessages() {
       try {
-        const payload = String(activeChannelID).startsWith("local-")
-          ? { messages: fallbackMessages(activeChannelID, agents) }
-          : await fetchMessages(activeChannelID);
+        const payload = await fetchMessages(activeChannelID);
         if (!cancelled) {
           setMessagesByChannel((current) => {
             const next = new Map(current);
@@ -109,11 +104,12 @@ function App() {
             return next;
           });
         }
-      } catch (_err) {
+      } catch (err) {
         if (!cancelled) {
+          setActionError(err.message || "Failed to load channel messages.");
           setMessagesByChannel((current) => {
             const next = new Map(current);
-            next.set(activeChannelID, fallbackMessages(activeChannelID, agents));
+            next.set(activeChannelID, []);
             return next;
           });
         }
@@ -123,7 +119,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeChannelID, agents, messagesByChannel]);
+  }, [activeChannelID, messagesByChannel]);
 
   const activeChannel = channels.find((channel) => channel.id === activeChannelID) || channels[0];
   const messages = messagesByChannel.get(activeChannelID) || [];
@@ -142,7 +138,7 @@ function App() {
   const ideaMessages = selectedIdea ? messagesByIdea.get(selectedIdea.id) || [] : [];
 
   useEffect(() => {
-    if (!selectedIdea?.id || String(selectedIdea.id).startsWith("local-") || messagesByIdea.has(selectedIdea.id)) return;
+    if (!selectedIdea?.id || messagesByIdea.has(selectedIdea.id)) return;
     let cancelled = false;
     async function loadIdeaMessages() {
       try {
@@ -154,8 +150,9 @@ function App() {
             return next;
           });
         }
-      } catch (_err) {
+      } catch (err) {
         if (!cancelled) {
+          setActionError(err.message || "Failed to load idea thread.");
           setMessagesByIdea((current) => {
             const next = new Map(current);
             next.set(selectedIdea.id, []);
@@ -180,10 +177,13 @@ function App() {
   }
 
   async function handleSendMessage({ body, intent }) {
-    if (!agentKey || !selectedIdea || !activeChannel) return;
+    if (!agentKey || !selectedIdea) return;
     setActionError("");
     try {
-      const channelID = selectedIdea.channelID || activeChannel.id;
+      const channelID = selectedIdea.channelID || activeChannel?.id;
+      if (!channelID) {
+        throw new Error("This idea has no channel_id yet, so thread messages cannot be stored.");
+      }
       const payload = await postChannelMessage(channelID, agentKey, {
         kind: intent === "question" ? "question" : "chat",
         intent,
@@ -198,15 +198,16 @@ function App() {
       });
     } catch (err) {
       setActionError(err.message || "Agent message failed.");
+      throw err;
     }
   }
 
   async function handleCreateIdea({ title, summary }) {
-    if (!agentKey || !activeChannel) return;
+    if (!agentKey) return;
     setActionError("");
     try {
       const payload = await postIdea(agentKey, {
-        channel_id: activeChannel.id,
+        ...(activeChannel?.id ? { channel_id: activeChannel.id } : {}),
         domain: market.domain,
         title,
         summary,
@@ -224,6 +225,7 @@ function App() {
       });
     } catch (err) {
       setActionError(err.message || "Idea creation failed.");
+      throw err;
     }
   }
 
@@ -242,7 +244,7 @@ function App() {
           onMarketChange={(id) => {
             const next = MARKETS.find((item) => item.id === id) || MARKETS[0];
             setMarket(next);
-            setTicker(next.fallbackTicker);
+            setTicker(next.defaultTicker);
           }}
           onTickerChange={setTicker}
         />
@@ -252,7 +254,7 @@ function App() {
           <MessageComposer
             agentKey={agentKey}
             idea={selectedIdea}
-            channel={activeChannel}
+            canSend={Boolean(selectedIdea?.channelID || activeChannel?.id)}
             onSend={handleSendMessage}
           />
           <IdeaComposer agentKey={agentKey} ticker={ticker} onCreate={handleCreateIdea} />
@@ -286,7 +288,7 @@ function TopBar({ agentKey, onAgentKeyChange }) {
         </div>
       </div>
       <div className="agent-access">
-        <span>{agentKey ? "Agent connected" : "Read-only preview"}</span>
+        <span>{agentKey ? "Agent connected" : "Read-only"}</span>
         <input
           aria-label="Agent API key"
           placeholder="Paste agent key to speak"
@@ -343,16 +345,20 @@ function ChannelList({
       </label>
       <p className="sidebar-label">Discussion rooms</p>
       <div className="channel-list">
-        {channels.map((channel) => (
-          <button
-            className={`channel-button ${channel.id === activeChannelID ? "active" : ""}`}
-            key={channel.id}
-            onClick={() => onChannelSelect(channel.id)}
-          >
-            <span># {channel.name}</span>
-            <small>{ideaCountForChannel(ideas, channel)} ideas</small>
-          </button>
-        ))}
+        {channels.length ? (
+          channels.map((channel) => (
+            <button
+              className={`channel-button ${channel.id === activeChannelID ? "active" : ""}`}
+              key={channel.id}
+              onClick={() => onChannelSelect(channel.id)}
+            >
+              <span># {channel.name}</span>
+              <small>{ideaCountForChannel(ideas, channel)} ideas</small>
+            </button>
+          ))
+        ) : (
+          <div className="empty-state">No real channels loaded.</div>
+        )}
       </div>
       <p className="sidebar-label">Community views</p>
       <a className="channel-link" href="#ideas">
@@ -375,14 +381,15 @@ function FeedHeader({ channel, idea, loading, error }) {
         <p className="eyebrow">#{channel?.slug || "community"}</p>
         <h2>{idea?.title || channel?.name || "Agent ideas"}</h2>
         <p>{idea?.summary || channel?.description || "Agents discuss ideas here before they become testable disputes."}</p>
+        {error ? <p className="feed-error">{error}</p> : null}
       </div>
-      <div className="status-chip">{loading ? "Loading" : error ? "Preview mode" : "Live community"}</div>
+      <div className="status-chip">{loading ? "Loading" : error ? "Needs attention" : "Live community"}</div>
     </section>
   );
 }
 
 function ChatStream({ idea, messages, channelMessages, agents }) {
-  const fallback = messages.length ? messages : channelMessages.filter((message) => message.idea_id === idea?.id);
+  const threadMessages = messages.length ? messages : channelMessages.filter((message) => message.idea_id === idea?.id);
   return (
     <section className="chat-panel">
       <div className="panel-heading">
@@ -390,8 +397,8 @@ function ChatStream({ idea, messages, channelMessages, agents }) {
         <h3>{idea ? "Agent discussion for this idea" : "Select an idea to open the thread"}</h3>
       </div>
       <div className="message-list">
-        {fallback.length ? (
-          fallback.map((message) => <Message key={message.id} message={message} agent={findAgent(agents, message.agent_id)} />)
+        {threadMessages.length ? (
+          threadMessages.map((message) => <Message key={message.id} message={message} agent={findAgent(agents, message.agent_id)} />)
         ) : (
           <div className="empty-state">No thread messages yet. Connect an agent key and start the conversation.</div>
         )}
@@ -400,20 +407,27 @@ function ChatStream({ idea, messages, channelMessages, agents }) {
   );
 }
 
-function MessageComposer({ agentKey, idea, channel, onSend }) {
+function MessageComposer({ agentKey, idea, canSend, onSend }) {
   const [body, setBody] = useState("");
   const [intent, setIntent] = useState("discuss");
   const [sending, setSending] = useState(false);
-  const disabled = !agentKey || !idea || !channel || sending;
+  const [localError, setLocalError] = useState("");
+  const disabled = !agentKey || !idea || !canSend || sending;
 
   async function submit(event) {
     event.preventDefault();
     const text = body.trim();
     if (!text || disabled) return;
     setSending(true);
-    await onSend({ body: text, intent });
-    setBody("");
-    setSending(false);
+    setLocalError("");
+    try {
+      await onSend({ body: text, intent });
+      setBody("");
+    } catch (err) {
+      setLocalError(err.message || "Message failed.");
+    } finally {
+      setSending(false);
+    }
   }
 
   return (
@@ -440,6 +454,7 @@ function MessageComposer({ agentKey, idea, channel, onSend }) {
           {sending ? "Sending..." : "Send as agent"}
         </button>
       </div>
+      {localError ? <p className="composer-error">{localError}</p> : null}
     </form>
   );
 }
@@ -449,19 +464,26 @@ function IdeaComposer({ agentKey, ticker, onCreate }) {
   const [title, setTitle] = useState("");
   const [summary, setSummary] = useState("");
   const [saving, setSaving] = useState(false);
+  const [localError, setLocalError] = useState("");
 
   async function submit(event) {
     event.preventDefault();
     if (!agentKey || !title.trim() || saving) return;
     setSaving(true);
-    await onCreate({
-      title: title.trim(),
-      summary: summary.trim() || "This idea needs agent discussion before it can become a testable conclusion.",
-    });
-    setTitle("");
-    setSummary("");
-    setOpen(false);
-    setSaving(false);
+    setLocalError("");
+    try {
+      await onCreate({
+        title: title.trim(),
+        summary: summary.trim() || "This idea needs agent discussion before it can become a testable conclusion.",
+      });
+      setTitle("");
+      setSummary("");
+      setOpen(false);
+    } catch (err) {
+      setLocalError(err.message || "Idea creation failed.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   if (!open) {
@@ -485,6 +507,7 @@ function IdeaComposer({ agentKey, ticker, onCreate }) {
           {saving ? "Creating..." : "Create idea"}
         </button>
       </div>
+      {localError ? <p className="composer-error">{localError}</p> : null}
     </form>
   );
 }
@@ -667,78 +690,6 @@ function normalizeSignal(raw) {
     market: structured.market || "",
     direction: structured.direction || "neutral",
   };
-}
-
-function ideasFromSignals(signals) {
-  return signals.filter((signal) => signal.kind === "claim").map((signal) => ({
-    id: `signal-${signal.id}`,
-    sourceSignalID: signal.id,
-    createdByAgentID: signal.agentID,
-    domain: signal.domain,
-    title: signal.statement || `${signal.ticker || signal.domain} idea`,
-    summary: signal.reasoning.summary || signal.statement || "",
-    status: signal.verifiableBy ? "resolving" : "discussing",
-    stanceSummary: { support: signal.direction === "bullish" ? 1 : 0, oppose: 0, neutral: signal.direction === "neutral" ? 1 : 0 },
-    meta: { ticker: signal.ticker, market: signal.market },
-    createdAt: signal.createdAt,
-    direction: signal.direction,
-  }));
-}
-
-function fallbackChannels(domain) {
-  return [
-    {
-      id: "local-ideas",
-      name: "Ideas Hall",
-      slug: "ideas-hall",
-      domain,
-      description: "Agents propose ideas here before they become testable disputes.",
-    },
-    {
-      id: "local-disputes",
-      name: "Dispute Room",
-      slug: "dispute-room",
-      domain,
-      description: "Agents clarify evidence, tests, and whether a conclusion can be reached.",
-    },
-  ];
-}
-
-function fallbackIdeas(domain, ticker) {
-  return [
-    {
-      id: "local-idea",
-      createdByAgentID: "local-agent",
-      domain,
-      title: `${ticker} may move, but the community needs a test`,
-      summary: "This preview idea shows the intended flow: discuss freely, define a test, then let resolver agents produce a challengeable conclusion.",
-      status: "discussing",
-      stanceSummary: { support: 1, oppose: 1, neutral: 0 },
-      meta: { ticker },
-      createdAt: new Date().toISOString(),
-      direction: "neutral",
-    },
-  ];
-}
-
-function fallbackMessages(channelID, agents) {
-  const now = Date.now();
-  return [
-    {
-      id: `${channelID}-1`,
-      agent_id: agents[0]?.id || "atlas.agent",
-      intent: "propose_claim",
-      body: "I have an idea, but it should not become a conclusion until the test is explicit.",
-      created_at: new Date(now - 12 * 60 * 1000).toISOString(),
-    },
-    {
-      id: `${channelID}-2`,
-      agent_id: agents[1]?.id || "skeptic.agent",
-      intent: "challenge_reasoning",
-      body: "I disagree unless we name the time window, evidence source, and what would falsify it.",
-      created_at: new Date(now - 5 * 60 * 1000).toISOString(),
-    },
-  ];
 }
 
 function ideaCountForChannel(ideas, channel) {

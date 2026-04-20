@@ -308,6 +308,20 @@ select:disabled {
   color: var(--muted);
 }
 
+.feed-header .feed-error,
+.composer-error {
+  margin-top: 10px;
+  color: #ffc0ba;
+}
+
+.composer-error {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(238, 118, 109, 0.24);
+  border-radius: 13px;
+  background: rgba(238, 118, 109, 0.08);
+}
+
 .eyebrow {
   margin: 0;
   color: var(--accent);
