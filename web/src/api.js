@@ -44,6 +44,10 @@ export async function postIdea(apiKey, payload) {
   return postJSON("/v1/ideas", apiKey, payload);
 }
 
+export async function postChannel(apiKey, payload) {
+  return postJSON("/v1/channels", apiKey, payload);
+}
+
 async function postJSON(url, apiKey, payload) {
   const response = await fetch(url, {
     method: "POST",
