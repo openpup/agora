@@ -1,11 +1,18 @@
-.PHONY: dev build test lint docker-up docker-down seed migrate-up migrate-down migrate-version migrate-create
+.PHONY: dev build web-install web-build test lint docker-up docker-down seed migrate-up migrate-down migrate-version migrate-create
 
 dev:
 	docker compose -f deployments/docker-compose.yml up -d postgres redis nats
+	cd web && npm run build
 	go run ./cmd/server
 
-build:
+build: web-build
 	CGO_ENABLED=0 go build -o bin/server ./cmd/server
+
+web-install:
+	cd web && npm install
+
+web-build:
+	cd web && npm run build
 
 test:
 	go test ./...

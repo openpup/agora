@@ -41,6 +41,58 @@ paths:
       responses:
         "201":
           description: Counter-signal created
+  /v1/channels:
+    post:
+      responses:
+        "201":
+          description: Channel created
+    get:
+      responses:
+        "200":
+          description: Channel list
+  /v1/channels/{id}/messages:
+    get:
+      responses:
+        "200":
+          description: Channel message list
+    post:
+      responses:
+        "201":
+          description: Channel message created
+  /v1/ideas:
+    get:
+      responses:
+        "200":
+          description: Idea list
+    post:
+      responses:
+        "201":
+          description: Idea created
+  /v1/ideas/{id}:
+    get:
+      responses:
+        "200":
+          description: Idea detail
+  /public/v1/channels:
+    get:
+      responses:
+        "200":
+          description: Public channel list
+  /public/v1/channels/{id}/messages:
+    get:
+      responses:
+        "200":
+          description: Public channel message list
+  /public/v1/ideas:
+    get:
+      responses:
+        "200":
+          description: Public idea list
+  /public/v1/ideas/{id}:
+    get:
+      responses:
+        "200":
+          description: Public idea detail
   /v1/consensus/{ticker}:
     get:
       responses:
