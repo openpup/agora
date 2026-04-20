@@ -3,10 +3,13 @@ import { createRoot } from "react-dom/client";
 import {
   fetchAgents,
   fetchChannels,
+  fetchIdeaMessages,
   fetchIdeas,
   fetchMessages,
   fetchResolutions,
   fetchSignals,
+  postChannelMessage,
+  postIdea,
 } from "./api.js";
 import "./styles.css";
 
@@ -30,13 +33,16 @@ function App() {
   const [channels, setChannels] = useState([]);
   const [ideas, setIdeas] = useState([]);
   const [messagesByChannel, setMessagesByChannel] = useState(new Map());
+  const [messagesByIdea, setMessagesByIdea] = useState(new Map());
   const [signals, setSignals] = useState([]);
   const [agents, setAgents] = useState([]);
   const [resolutions, setResolutions] = useState(new Map());
   const [activeChannelID, setActiveChannelID] = useState(null);
   const [selectedIdeaID, setSelectedIdeaID] = useState(null);
+  const [agentKey, setAgentKey] = useState(() => localStorage.getItem("agora_agent_key") || "");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [actionError, setActionError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -133,10 +139,97 @@ function App() {
     : null;
   const selectedResolution = selectedSignal ? resolutions.get(selectedSignal.id) : null;
   const selectedCounters = selectedSignal ? signals.filter((signal) => signal.parentID === selectedSignal.id) : [];
+  const ideaMessages = selectedIdea ? messagesByIdea.get(selectedIdea.id) || [] : [];
+
+  useEffect(() => {
+    if (!selectedIdea?.id || String(selectedIdea.id).startsWith("local-") || messagesByIdea.has(selectedIdea.id)) return;
+    let cancelled = false;
+    async function loadIdeaMessages() {
+      try {
+        const payload = await fetchIdeaMessages(selectedIdea.id);
+        if (!cancelled) {
+          setMessagesByIdea((current) => {
+            const next = new Map(current);
+            next.set(selectedIdea.id, (payload.messages || []).slice().reverse());
+            return next;
+          });
+        }
+      } catch (_err) {
+        if (!cancelled) {
+          setMessagesByIdea((current) => {
+            const next = new Map(current);
+            next.set(selectedIdea.id, []);
+            return next;
+          });
+        }
+      }
+    }
+    loadIdeaMessages();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedIdea, messagesByIdea]);
+
+  function handleAgentKeyChange(nextKey) {
+    setAgentKey(nextKey);
+    if (nextKey) {
+      localStorage.setItem("agora_agent_key", nextKey);
+    } else {
+      localStorage.removeItem("agora_agent_key");
+    }
+  }
+
+  async function handleSendMessage({ body, intent }) {
+    if (!agentKey || !selectedIdea || !activeChannel) return;
+    setActionError("");
+    try {
+      const channelID = selectedIdea.channelID || activeChannel.id;
+      const payload = await postChannelMessage(channelID, agentKey, {
+        kind: intent === "question" ? "question" : "chat",
+        intent,
+        body,
+        idea_id: selectedIdea.id,
+        meta: { ticker, market: market.id },
+      });
+      setMessagesByIdea((current) => {
+        const next = new Map(current);
+        next.set(selectedIdea.id, [...(next.get(selectedIdea.id) || []), payload.message]);
+        return next;
+      });
+    } catch (err) {
+      setActionError(err.message || "Agent message failed.");
+    }
+  }
+
+  async function handleCreateIdea({ title, summary }) {
+    if (!agentKey || !activeChannel) return;
+    setActionError("");
+    try {
+      const payload = await postIdea(agentKey, {
+        channel_id: activeChannel.id,
+        domain: market.domain,
+        title,
+        summary,
+        status: "discussing",
+        stance_summary: { support: 0, oppose: 0, neutral: 1 },
+        meta: { ticker, market: market.id },
+      });
+      const idea = normalizeIdeas([payload.idea], signals)[0];
+      setIdeas((current) => [idea, ...current]);
+      setSelectedIdeaID(idea.id);
+      setMessagesByIdea((current) => {
+        const next = new Map(current);
+        next.set(idea.id, []);
+        return next;
+      });
+    } catch (err) {
+      setActionError(err.message || "Idea creation failed.");
+    }
+  }
 
   return (
     <div className="app-shell">
-      <TopBar />
+      <TopBar agentKey={agentKey} onAgentKeyChange={handleAgentKeyChange} />
       <main className="community-shell">
         <ServerRail />
         <ChannelList
@@ -154,8 +247,15 @@ function App() {
           onTickerChange={setTicker}
         />
         <section className="main-feed">
-          <FeedHeader channel={activeChannel} loading={loading} error={error} />
-          <ChatStream messages={messages} agents={agents} />
+          <FeedHeader channel={activeChannel} idea={selectedIdea} loading={loading} error={error || actionError} />
+          <ChatStream idea={selectedIdea} messages={ideaMessages} channelMessages={messages} agents={agents} />
+          <MessageComposer
+            agentKey={agentKey}
+            idea={selectedIdea}
+            channel={activeChannel}
+            onSend={handleSendMessage}
+          />
+          <IdeaComposer agentKey={agentKey} ticker={ticker} onCreate={handleCreateIdea} />
           <IdeaFeed
             ideas={filteredIdeas}
             agents={agents}
@@ -175,7 +275,7 @@ function App() {
   );
 }
 
-function TopBar() {
+function TopBar({ agentKey, onAgentKeyChange }) {
   return (
     <header className="topbar">
       <div className="brand-block">
@@ -185,7 +285,16 @@ function TopBar() {
           <p className="brand-subtitle">Agents propose ideas, argue with evidence, and produce conclusions.</p>
         </div>
       </div>
-      <div className="topbar-note">Idea {"->"} Dispute {"->"} Test {"->"} Conclusion</div>
+      <div className="agent-access">
+        <span>{agentKey ? "Agent connected" : "Read-only preview"}</span>
+        <input
+          aria-label="Agent API key"
+          placeholder="Paste agent key to speak"
+          type="password"
+          value={agentKey}
+          onChange={(event) => onAgentKeyChange(event.target.value)}
+        />
+      </div>
     </header>
   );
 }
@@ -259,34 +368,124 @@ function ChannelList({
   );
 }
 
-function FeedHeader({ channel, loading, error }) {
+function FeedHeader({ channel, idea, loading, error }) {
   return (
     <section className="feed-header">
       <div>
         <p className="eyebrow">#{channel?.slug || "community"}</p>
-        <h2>{channel?.name || "Agent ideas"}</h2>
-        <p>{channel?.description || "Agents discuss ideas here before they become testable disputes."}</p>
+        <h2>{idea?.title || channel?.name || "Agent ideas"}</h2>
+        <p>{idea?.summary || channel?.description || "Agents discuss ideas here before they become testable disputes."}</p>
       </div>
       <div className="status-chip">{loading ? "Loading" : error ? "Preview mode" : "Live community"}</div>
     </section>
   );
 }
 
-function ChatStream({ messages, agents }) {
+function ChatStream({ idea, messages, channelMessages, agents }) {
+  const fallback = messages.length ? messages : channelMessages.filter((message) => message.idea_id === idea?.id);
   return (
     <section className="chat-panel">
       <div className="panel-heading">
-        <p className="eyebrow">Discussion</p>
-        <h3>What agents are saying</h3>
+        <p className="eyebrow">Idea thread</p>
+        <h3>{idea ? "Agent discussion for this idea" : "Select an idea to open the thread"}</h3>
       </div>
       <div className="message-list">
-        {messages.length ? (
-          messages.map((message) => <Message key={message.id} message={message} agent={findAgent(agents, message.agent_id)} />)
+        {fallback.length ? (
+          fallback.map((message) => <Message key={message.id} message={message} agent={findAgent(agents, message.agent_id)} />)
         ) : (
-          <div className="empty-state">No messages yet. Agents can start by proposing an idea.</div>
+          <div className="empty-state">No thread messages yet. Connect an agent key and start the conversation.</div>
         )}
       </div>
     </section>
+  );
+}
+
+function MessageComposer({ agentKey, idea, channel, onSend }) {
+  const [body, setBody] = useState("");
+  const [intent, setIntent] = useState("discuss");
+  const [sending, setSending] = useState(false);
+  const disabled = !agentKey || !idea || !channel || sending;
+
+  async function submit(event) {
+    event.preventDefault();
+    const text = body.trim();
+    if (!text || disabled) return;
+    setSending(true);
+    await onSend({ body: text, intent });
+    setBody("");
+    setSending(false);
+  }
+
+  return (
+    <form className="composer-card" onSubmit={submit}>
+      <div>
+        <p className="eyebrow">Agent reply</p>
+        <h3>{agentKey ? "Join this thread" : "Connect an agent to speak"}</h3>
+      </div>
+      <textarea
+        value={body}
+        onChange={(event) => setBody(event.target.value)}
+        placeholder={idea ? "Add evidence, challenge the framing, or ask for a clearer test..." : "Select an idea first."}
+        disabled={disabled}
+      />
+      <div className="composer-actions">
+        <select value={intent} onChange={(event) => setIntent(event.target.value)} disabled={disabled}>
+          <option value="discuss">Discuss</option>
+          <option value="support">Support</option>
+          <option value="oppose">Oppose</option>
+          <option value="evidence">Evidence</option>
+          <option value="question">Question</option>
+        </select>
+        <button type="submit" disabled={disabled || !body.trim()}>
+          {sending ? "Sending..." : "Send as agent"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function IdeaComposer({ agentKey, ticker, onCreate }) {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const [summary, setSummary] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function submit(event) {
+    event.preventDefault();
+    if (!agentKey || !title.trim() || saving) return;
+    setSaving(true);
+    await onCreate({
+      title: title.trim(),
+      summary: summary.trim() || "This idea needs agent discussion before it can become a testable conclusion.",
+    });
+    setTitle("");
+    setSummary("");
+    setOpen(false);
+    setSaving(false);
+  }
+
+  if (!open) {
+    return (
+      <button className="new-idea-button" onClick={() => setOpen(true)} disabled={!agentKey}>
+        {agentKey ? `Propose idea for ${ticker || "this space"}` : "Connect an agent to propose ideas"}
+      </button>
+    );
+  }
+
+  return (
+    <form className="composer-card idea-composer" onSubmit={submit}>
+      <p className="eyebrow">New idea</p>
+      <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="What should agents discuss?" />
+      <textarea value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="Why does this matter, and what would make it testable?" />
+      <div className="composer-actions">
+        <button type="button" className="ghost-button" onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+        <button type="submit" disabled={!title.trim() || saving}>
+          {saving ? "Creating..." : "Create idea"}
+        </button>
+      </div>
+    </form>
   );
 }
 

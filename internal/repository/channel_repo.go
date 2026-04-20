@@ -19,6 +19,7 @@ type ListChannelsParams struct {
 
 type ListChannelMessagesParams struct {
 	ChannelID string
+	IdeaID    *string
 	Before    *time.Time
 	Limit     int
 }
@@ -101,9 +102,9 @@ func (r *PGChannelRepository) CreateMessage(ctx context.Context, message *core.C
 	refs, _ := json.Marshal(message.Refs)
 	meta, _ := json.Marshal(message.Meta)
 	_, err := r.pool.Exec(ctx, `
-		INSERT INTO channel_messages (id, channel_id, agent_id, kind, intent, body, refs, meta, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-	`, message.ID, message.ChannelID, message.AgentID, message.Kind, message.Intent, message.Body, refs, meta, message.CreatedAt)
+		INSERT INTO channel_messages (id, channel_id, idea_id, agent_id, kind, intent, body, refs, meta, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+	`, message.ID, message.ChannelID, message.IdeaID, message.AgentID, message.Kind, message.Intent, message.Body, refs, meta, message.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("channel_repo.CreateMessage: %w", err)
 	}
@@ -115,15 +116,23 @@ func (r *PGChannelRepository) ListMessages(ctx context.Context, params ListChann
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	args := []any{params.ChannelID}
-	where := "channel_id=$1"
+	args := make([]any, 0, 4)
+	where := "TRUE"
+	if params.ChannelID != "" {
+		args = append(args, params.ChannelID)
+		where += fmt.Sprintf(" AND channel_id=$%d", len(args))
+	}
+	if params.IdeaID != nil && *params.IdeaID != "" {
+		args = append(args, *params.IdeaID)
+		where += fmt.Sprintf(" AND idea_id=$%d", len(args))
+	}
 	if params.Before != nil {
 		args = append(args, *params.Before)
-		where += " AND created_at < $2"
+		where += fmt.Sprintf(" AND created_at < $%d", len(args))
 	}
 	args = append(args, limit)
 	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
-		SELECT id, channel_id, agent_id, kind, intent, body, refs, meta, created_at
+		SELECT id, channel_id, idea_id, agent_id, kind, intent, body, refs, meta, created_at
 		FROM channel_messages WHERE %s ORDER BY created_at DESC, id DESC LIMIT $%d
 	`, where, len(args)), args...)
 	if err != nil {
@@ -155,7 +164,7 @@ func scanChannel(row pgx.Row) (*core.Channel, error) {
 func scanChannelMessage(row pgx.Row) (*core.ChannelMessage, error) {
 	var message core.ChannelMessage
 	var refs, meta []byte
-	if err := row.Scan(&message.ID, &message.ChannelID, &message.AgentID, &message.Kind, &message.Intent, &message.Body, &refs, &meta, &message.CreatedAt); err != nil {
+	if err := row.Scan(&message.ID, &message.ChannelID, &message.IdeaID, &message.AgentID, &message.Kind, &message.Intent, &message.Body, &refs, &meta, &message.CreatedAt); err != nil {
 		return nil, err
 	}
 	_ = json.Unmarshal(refs, &message.Refs)

@@ -126,6 +126,7 @@ func main() {
 		public.GET("/channels", channelHandler.ListChannels)
 		public.GET("/channels/:id/messages", channelHandler.ListMessages)
 		public.GET("/ideas", ideaHandler.List)
+		public.GET("/ideas/:id/messages", channelHandler.ListIdeaMessages)
 		public.GET("/ideas/:id", ideaHandler.Get)
 		public.GET("/signals", signalHandler.List)
 		public.GET("/signals/:id", signalHandler.Get)
@@ -160,6 +161,7 @@ func main() {
 		v1.POST("/channels/:id/messages", channelHandler.CreateMessage)
 		v1.POST("/ideas", ideaHandler.Create)
 		v1.GET("/ideas", ideaHandler.List)
+		v1.GET("/ideas/:id/messages", channelHandler.ListIdeaMessages)
 		v1.GET("/ideas/:id", ideaHandler.Get)
 
 		v1.GET("/consensus", consensusHandler.GetConsensus)

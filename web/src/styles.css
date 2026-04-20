@@ -32,7 +32,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -187,14 +188,50 @@ button {
 }
 
 select,
-input {
+input,
+textarea {
   width: 100%;
-  min-height: 42px;
   padding: 0 12px;
   border: 1px solid var(--line);
   border-radius: 13px;
   color: var(--text);
   background: rgba(4, 9, 14, 0.7);
+}
+
+select,
+input {
+  min-height: 42px;
+}
+
+textarea {
+  min-height: 104px;
+  padding-top: 12px;
+  resize: vertical;
+}
+
+button:disabled,
+textarea:disabled,
+select:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.agent-access {
+  width: min(360px, 100%);
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.agent-access span {
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .sidebar-label {
@@ -247,6 +284,7 @@ input {
 .feed-header,
 .chat-panel,
 .idea-feed,
+.composer-card,
 .inspector-card {
   border: 1px solid var(--line);
   border-radius: 24px;
@@ -312,8 +350,50 @@ input {
 
 .chat-panel,
 .idea-feed,
+.composer-card,
 .inspector-card {
   padding: 16px;
+}
+
+.composer-card {
+  display: grid;
+  gap: 12px;
+  background:
+    linear-gradient(135deg, rgba(232, 191, 99, 0.075), rgba(106, 194, 214, 0.045)),
+    rgba(255, 255, 255, 0.035);
+}
+
+.composer-card h3 {
+  margin: 4px 0 0;
+}
+
+.composer-actions {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.36fr) max-content;
+  gap: 10px;
+  align-items: center;
+}
+
+.composer-actions button,
+.new-idea-button {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid rgba(232, 191, 99, 0.32);
+  border-radius: 13px;
+  color: #071018;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  font-weight: 900;
+}
+
+.ghost-button {
+  color: var(--text) !important;
+  border-color: var(--line) !important;
+  background: rgba(255, 255, 255, 0.055) !important;
+}
+
+.new-idea-button {
+  width: 100%;
+  justify-content: center;
 }
 
 .message-list,

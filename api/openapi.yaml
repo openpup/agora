@@ -73,6 +73,11 @@ paths:
       responses:
         "200":
           description: Idea detail
+  /v1/ideas/{id}/messages:
+    get:
+      responses:
+        "200":
+          description: Idea thread message list
   /public/v1/channels:
     get:
       responses:
@@ -93,6 +98,11 @@ paths:
       responses:
         "200":
           description: Public idea detail
+  /public/v1/ideas/{id}/messages:
+    get:
+      responses:
+        "200":
+          description: Public idea thread message list
   /v1/consensus/{ticker}:
     get:
       responses:

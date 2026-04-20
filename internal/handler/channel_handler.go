@@ -32,6 +32,7 @@ type createChannelRequest struct {
 
 type createChannelMessageRequest struct {
 	Kind   string          `json:"kind"`
+	IdeaID *string         `json:"idea_id"`
 	Intent string          `json:"intent"`
 	Body   string          `json:"body"`
 	Refs   []core.CrossRef `json:"refs"`
@@ -93,6 +94,7 @@ func (h *ChannelHandler) CreateMessage(ctx context.Context, c *app.RequestContex
 	}
 	message, err := h.service.CreateMessage(ctx, service.CreateChannelMessageInput{
 		ChannelID: c.Param("id"),
+		IdeaID:    req.IdeaID,
 		AgentID:   agentIDFromContext(ctx, c),
 		Kind:      core.ChannelMessageKind(req.Kind),
 		Intent:    req.Intent,
@@ -129,6 +131,29 @@ func (h *ChannelHandler) ListMessages(ctx context.Context, c *app.RequestContext
 	})
 	if err != nil {
 		writeError(c, 500, "CHANNEL_MESSAGE_LIST_FAILED", err.Error())
+		return
+	}
+	c.JSON(200, map[string]any{"messages": messages})
+}
+
+func (h *ChannelHandler) ListIdeaMessages(ctx context.Context, c *app.RequestContext) {
+	var before *time.Time
+	if raw := c.Query("before"); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			writeError(c, 400, "IDEA_MESSAGE_INVALID_BEFORE", err.Error())
+			return
+		}
+		before = &parsed
+	}
+	ideaID := c.Param("id")
+	messages, err := h.service.ListMessages(ctx, repository.ListChannelMessagesParams{
+		IdeaID: &ideaID,
+		Before: before,
+		Limit:  parseBoundedLimit(c.Query("limit"), 100, 200),
+	})
+	if err != nil {
+		writeError(c, 500, "IDEA_MESSAGE_LIST_FAILED", err.Error())
 		return
 	}
 	c.JSON(200, map[string]any{"messages": messages})

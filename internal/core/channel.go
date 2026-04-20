@@ -35,6 +35,7 @@ const (
 type ChannelMessage struct {
 	ID        string             `json:"id"`
 	ChannelID string             `json:"channel_id"`
+	IdeaID    *string            `json:"idea_id,omitempty"`
 	AgentID   string             `json:"agent_id"`
 	Kind      ChannelMessageKind `json:"kind"`
 	Intent    string             `json:"intent"`

@@ -24,6 +24,7 @@ type CreateChannelInput struct {
 
 type CreateChannelMessageInput struct {
 	ChannelID string
+	IdeaID    *string
 	AgentID   string
 	Kind      core.ChannelMessageKind
 	Intent    string
@@ -96,6 +97,7 @@ func (s *ChannelService) CreateMessage(ctx context.Context, input CreateChannelM
 	message := &core.ChannelMessage{
 		ID:        uuid.NewString(),
 		ChannelID: input.ChannelID,
+		IdeaID:    input.IdeaID,
 		AgentID:   input.AgentID,
 		Kind:      kind,
 		Intent:    intent,
@@ -111,8 +113,8 @@ func (s *ChannelService) CreateMessage(ctx context.Context, input CreateChannelM
 }
 
 func (s *ChannelService) ListMessages(ctx context.Context, params repository.ListChannelMessagesParams) ([]core.ChannelMessage, error) {
-	if params.ChannelID == "" {
-		return nil, fmt.Errorf("channel_service.ListMessages channel: %w", pkgerrors.ErrInvalidInput)
+	if params.ChannelID == "" && (params.IdeaID == nil || *params.IdeaID == "") {
+		return nil, fmt.Errorf("channel_service.ListMessages target: %w", pkgerrors.ErrInvalidInput)
 	}
 	messages, err := s.repo.ListMessages(ctx, params)
 	if err != nil {

@@ -71,6 +71,7 @@ type seededChannel struct {
 type seededChannelMessage struct {
 	ID        string
 	ChannelID string
+	IdeaID    *string
 	AgentID   string
 	Kind      string
 	Intent    string
@@ -188,10 +189,10 @@ func main() {
 	if err := seedChannels(ctx, pool); err != nil {
 		panic(err)
 	}
-	if err := seedChannelMessages(ctx, pool); err != nil {
+	if err := seedIdeas(ctx, pool); err != nil {
 		panic(err)
 	}
-	if err := seedIdeas(ctx, pool); err != nil {
+	if err := seedChannelMessages(ctx, pool); err != nil {
 		panic(err)
 	}
 	if err := seedIdeaPositions(ctx, pool); err != nil {
@@ -232,6 +233,10 @@ func envOrDefault(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func strPtr(value string) *string {
+	return &value
 }
 
 func seedIdeas(ctx context.Context, pool *pgxpool.Pool) error {
@@ -401,6 +406,7 @@ func seedChannelMessages(ctx context.Context, pool *pgxpool.Pool) error {
 		{
 			ID:        "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1",
 			ChannelID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+			IdeaID:    strPtr("99999999-9999-9999-9999-999999999991"),
 			AgentID:   "11111111-1111-1111-1111-111111111111",
 			Kind:      "chat",
 			Intent:    "propose_claim",
@@ -412,6 +418,7 @@ func seedChannelMessages(ctx context.Context, pool *pgxpool.Pool) error {
 		{
 			ID:        "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2",
 			ChannelID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+			IdeaID:    strPtr("99999999-9999-9999-9999-999999999991"),
 			AgentID:   "22222222-2222-2222-2222-222222222222",
 			Kind:      "question",
 			Intent:    "challenge_reasoning",
@@ -423,6 +430,7 @@ func seedChannelMessages(ctx context.Context, pool *pgxpool.Pool) error {
 		{
 			ID:        "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3",
 			ChannelID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3",
+			IdeaID:    strPtr("99999999-9999-9999-9999-999999999991"),
 			AgentID:   "11111111-1111-1111-1111-111111111111",
 			Kind:      "protocol",
 			Intent:    "resolution_note",
@@ -434,6 +442,7 @@ func seedChannelMessages(ctx context.Context, pool *pgxpool.Pool) error {
 		{
 			ID:        "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb4",
 			ChannelID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2",
+			IdeaID:    strPtr("99999999-9999-9999-9999-999999999993"),
 			AgentID:   "44444444-4444-4444-4444-444444444444",
 			Kind:      "chat",
 			Intent:    "discuss",
@@ -448,16 +457,17 @@ func seedChannelMessages(ctx context.Context, pool *pgxpool.Pool) error {
 		refs, _ := json.Marshal(message.Refs)
 		meta, _ := json.Marshal(message.Meta)
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO channel_messages (id, channel_id, agent_id, kind, intent, body, refs, meta, created_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+			INSERT INTO channel_messages (id, channel_id, idea_id, agent_id, kind, intent, body, refs, meta, created_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 			ON CONFLICT (id) DO UPDATE SET
+				idea_id=EXCLUDED.idea_id,
 				kind=EXCLUDED.kind,
 				intent=EXCLUDED.intent,
 				body=EXCLUDED.body,
 				refs=EXCLUDED.refs,
 				meta=EXCLUDED.meta,
 				created_at=EXCLUDED.created_at
-		`, message.ID, message.ChannelID, message.AgentID, message.Kind, message.Intent, message.Body, refs, meta, message.CreatedAt); err != nil {
+		`, message.ID, message.ChannelID, message.IdeaID, message.AgentID, message.Kind, message.Intent, message.Body, refs, meta, message.CreatedAt); err != nil {
 			return fmt.Errorf("seedChannelMessages: %w", err)
 		}
 	}
