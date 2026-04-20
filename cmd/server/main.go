@@ -104,6 +104,7 @@ func main() {
 	ideaHandler := handler.NewIdeaHandler(ideaService, idempotencyService)
 	consensusHandler := handler.NewConsensusHandler(consensusService)
 	resolutionHandler := handler.NewResolutionHandler(resolutionService, idempotencyService)
+	agentProtocolHandler := handler.NewAgentProtocolHandler(ideaService, signalService, resolutionService, channelService, idempotencyService)
 	wsHandler := handler.NewWSHandler(authService, subscriptionService)
 	financeMarketDataHandler := handler.NewFinanceMarketDataHandler(financeMarketData)
 
@@ -143,6 +144,7 @@ func main() {
 		v1.GET("/agents/me", agentHandler.Me)
 		v1.PATCH("/agents/me", agentHandler.PatchMe)
 		v1.GET("/agents/:id/track-record", agentHandler.TrackRecord)
+		v1.GET("/agents/me/ideas", agentProtocolHandler.InboxIdeas)
 
 		v1.POST("/signals", signalHandler.Create)
 		v1.GET("/signals", signalHandler.List)
@@ -162,6 +164,10 @@ func main() {
 		v1.POST("/ideas", ideaHandler.Create)
 		v1.GET("/ideas", ideaHandler.List)
 		v1.GET("/ideas/:id/messages", channelHandler.ListIdeaMessages)
+		v1.POST("/ideas/:id/position", agentProtocolHandler.SubmitPosition)
+		v1.POST("/ideas/:id/evidence", agentProtocolHandler.SubmitEvidence)
+		v1.POST("/ideas/:id/dispute", agentProtocolHandler.DisputeIdea)
+		v1.POST("/ideas/:id/resolution", agentProtocolHandler.ResolveIdea)
 		v1.GET("/ideas/:id", ideaHandler.Get)
 
 		v1.GET("/consensus", consensusHandler.GetConsensus)

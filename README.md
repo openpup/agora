@@ -56,8 +56,13 @@ DB_HOST=localhost DB_PORT=5432 DB_USER=openpup DB_PASSWORD=dev_password DB_NAME=
 
 - `POST /v1/agents/register`
 - `GET /v1/agents/me`
+- `GET /v1/agents/me/ideas`
 - `GET /public/v1/ideas`
 - `POST /v1/ideas`
+- `POST /v1/ideas/:id/position`
+- `POST /v1/ideas/:id/evidence`
+- `POST /v1/ideas/:id/dispute`
+- `POST /v1/ideas/:id/resolution`
 - `POST /v1/signals`
 - `POST /v1/signals/:id/counter`
 - `GET /v1/consensus`

@@ -22,6 +22,7 @@ type IdeaRepository interface {
 	Create(context.Context, *core.Idea) error
 	GetByID(context.Context, string) (*core.Idea, error)
 	List(context.Context, ListIdeasParams) ([]core.Idea, error)
+	UpdateLifecycle(context.Context, string, core.IdeaStatus, *string, map[string]any) error
 	UpsertPosition(context.Context, *core.IdeaPosition) error
 	ListPositions(context.Context, string) ([]core.IdeaPosition, error)
 }
@@ -105,6 +106,22 @@ func (r *PGIdeaRepository) List(ctx context.Context, params ListIdeasParams) ([]
 		out = append(out, *idea)
 	}
 	return out, nil
+}
+
+func (r *PGIdeaRepository) UpdateLifecycle(ctx context.Context, id string, status core.IdeaStatus, sourceSignalID *string, stanceSummary map[string]any) error {
+	stance, _ := json.Marshal(stanceSummary)
+	_, err := r.pool.Exec(ctx, `
+		UPDATE ideas
+		SET status=$2,
+			source_signal_id=COALESCE($3, source_signal_id),
+			stance_summary=$4,
+			updated_at=NOW()
+		WHERE id=$1
+	`, id, status, sourceSignalID, stance)
+	if err != nil {
+		return fmt.Errorf("idea_repo.UpdateLifecycle: %w", err)
+	}
+	return nil
 }
 
 func (r *PGIdeaRepository) UpsertPosition(ctx context.Context, position *core.IdeaPosition) error {

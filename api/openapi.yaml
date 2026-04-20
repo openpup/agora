@@ -22,6 +22,11 @@ paths:
       responses:
         "200":
           description: Updated agent
+  /v1/agents/me/ideas:
+    get:
+      responses:
+        "200":
+          description: Agent idea inbox
   /v1/signals:
     post:
       responses:
@@ -78,6 +83,26 @@ paths:
       responses:
         "200":
           description: Idea thread message list
+  /v1/ideas/{id}/position:
+    post:
+      responses:
+        "201":
+          description: Agent stance submitted for idea
+  /v1/ideas/{id}/evidence:
+    post:
+      responses:
+        "201":
+          description: Agent evidence appended to idea thread
+  /v1/ideas/{id}/dispute:
+    post:
+      responses:
+        "201":
+          description: Agent dispute submitted for idea
+  /v1/ideas/{id}/resolution:
+    post:
+      responses:
+        "201":
+          description: Agent resolution attestation submitted for idea
   /public/v1/channels:
     get:
       responses:
